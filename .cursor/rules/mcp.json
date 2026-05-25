@@ -1,0 +1,42 @@
+{
+  "mcpServers": {
+    "github": {
+      "url": "https://api.githubcopilot.com/mcp/",
+      "description": "GitHub MCP Server — release PRs, repos, issues (PAT auth)",
+      "headers": {
+        "Authorization": "Bearer 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",
+        "X-GitHub-MCP-Toolsets": "context,repos,pull_requests,issues"
+      }
+    },
+    "gw-sourcegraph": {
+      "url": "https://panacea-dev.eng.nutanix.com/mcp/sourcegraph",
+      "description": "gw -> sourcegraph (no PII filter)"
+    },
+    "gw-diamond": {
+      "url": "https://panacea-dev.eng.nutanix.com/mcp/diamond",
+      "description": "gw -> diamond (no PII filter)"
+    },
+    "gw-jita": {
+      "url": "https://panacea-dev.eng.nutanix.com/mcp/jita",
+      "description": "gw -> jita (no PII filter)"
+    },
+    "gw-supportgpt": {
+      "url": "https://panacea-dev.eng.nutanix.com/mcp/supportgpt",
+      "description": "gw -> supportgpt (PII ON, Request+Response, fail-open)"
+    },
+    "gw-nurag": {
+      "url": "https://panacea-dev.eng.nutanix.com/mcp/nurag",
+      "description": "gw -> nurag (PII ON, Request+Response, fail-open)"
+    },
+    "atlassian": {
+      "url": "https://panacea-dev.eng.nutanix.com/mcp/atlassian",
+      "description": "gw -> atlassian (PII ON, Request+Response, fail-open)",
+      "headers": {
+        "X-Atlassian-Jira-Personal-Token": "OTk1MjMwMDg4MDg2OuZeGmKICueqsmN1tobZyFv3gN7O",
+        "X-Atlassian-Jira-Url": "https://jira.nutanix.com",
+        "X-Atlassian-Confluence-Url": "https://confluence.eng.nutanix.com:8443/",
+        "X-Atlassian-Confluence-Personal-Token": "OTQxOTQ0MDAwNDI5OgpwtnY3qqsOTzsrIL+dzMniqi8a"
+      }
+    }
+  }
+}

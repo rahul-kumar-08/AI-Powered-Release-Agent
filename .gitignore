@@ -1,0 +1,7 @@
+src/.env
+.env
+*.env
+
+# MCP config contains auth tokens — keep local only
+.cursor/mcp.json
+.cursor/rules/mcp.json

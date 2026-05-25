@@ -1,0 +1,61 @@
+---
+description: Automate Confluence release table update workflow on request
+alwaysApply: true
+---
+
+# Confluence Release Update Workflow
+
+When the user asks to "update Confluence page" for release details, perform this workflow end-to-end unless blocked by missing credentials/auth.
+
+## Path A — MCP-based extraction (preferred)
+
+1. **Extract via GitHub MCP tools** following the steps in `release-agent.mdc` (search_issues → get_pull_request → list_pull_requests → build release windows).
+2. **Display the release table** to the user for confirmation.
+3. **Update Confluence** using the script with an existing JSON, or run the full pipeline:
+   ```bash
+   src/run_release_mission.sh both <branch[,branch,...]> <count>
+   ```
+
+If MCP extraction succeeds but the user only wants to push already-extracted data to Confluence:
+```bash
+src/run_release_mission.sh update <branch> <count> <json_path>
+```
+
+## Path B — Script-only workflow (fallback)
+
+Use when MCP tools are unavailable or fail:
+
+1. **Extract only** (user asks for release data without Confluence update):
+   ```bash
+   src/run_release_mission.sh extract <branch[,branch,...]> <count>
+   ```
+2. **Extract + update** (user asks to update Confluence):
+   ```bash
+   src/run_release_mission.sh both <branch[,branch,...]> <count>
+   ```
+3. **Update only** (JSON already exists, user asks to push to Confluence):
+   ```bash
+   src/run_release_mission.sh update <branch> <count> <json_path>
+   ```
+
+For multi-branch requests, pass comma-separated branches:
+```bash
+src/run_release_mission.sh both "master,ganges-7.6,ganges-7.5" 1
+```
+
+## Report result clearly
+
+- Added entries count/titles, or
+- "already exists" if no changes, or
+- exact blocker (auth/config) if update fails.
+
+## Defaults for this project
+
+- Release PR title filter: `^Release`
+- Prefer merged Release PRs only
+- Include associated PRs between previous and current release in the table cell
+- Preserve table columns:
+  - Release Key
+  - Release Title
+  - Release Merged At (UTC)
+  - Associated PRs (Title + PR + Merged At UTC)

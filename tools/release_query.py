@@ -12,6 +12,8 @@ Usage:
   python3 tools/release_query.py --branch master --count 10 --with-sg-date --with-github-date
   python3 tools/release_query.py --branch master --count 5 --format json --output /tmp/out.json
   python3 tools/release_query.py --branch master --count 5 --no-cache
+  python3 tools/release_query.py --branch master --count 1 --diagnostics
+  python3 tools/release_query.py --branch master --count 1 --diagnostics-only
 
 Environment variables (from tools/.env):
   GITHUB_TOKEN       — GitHub PAT
@@ -25,14 +27,16 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     from tools.exceptions import (
@@ -70,6 +74,7 @@ CACHE_TTL = 300  # seconds
 MAX_WORKERS = 10
 RETRYABLE_HTTP = (429, 502, 503)
 MAX_RETRIES = 3
+DIAG_TOKEN_KEYS = ("GITHUB_TOKEN", "SOURCEGRAPH_TOKEN", "JIRA_API_TOKEN")
 
 # ---------------------------------------------------------------------------
 # Env helpers
@@ -92,6 +97,90 @@ def _env(name):
     if not val:
         raise ConfigError(f"{name} not set. Add to tools/.env or export it.")
     return val
+
+
+def _cache_path(owner, repo, branch, count, filter_type):
+    """Build deterministic cache path for this query tuple."""
+    cache_key = f"{owner}_{repo}_{branch}_{count}_{filter_type}"
+    digest = hashlib.md5(cache_key.encode()).hexdigest()[:12]
+    return os.path.join(CACHE_DIR, f"release_cache_{digest}.json")
+
+
+def _git_info():
+    """Return git branch/head info best-effort without failing the query."""
+    out = {"head": None, "branch": None}
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if head.returncode == 0:
+            out["head"] = head.stdout.strip()
+    except Exception:
+        pass
+    try:
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if branch.returncode == 0:
+            out["branch"] = branch.stdout.strip() or "detached"
+    except Exception:
+        pass
+    return out
+
+
+def build_diagnostics(args, owner, repo):
+    """Collect non-secret runtime/config metadata for env comparison."""
+    cache_path = _cache_path(owner, repo, args.branch, args.count, args.filter_type)
+    cache_exists = os.path.isfile(cache_path)
+    cache_age = int(time.time() - os.path.getmtime(cache_path)) if cache_exists else None
+    git_info = _git_info()
+
+    return {
+        "timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "runtime": {
+            "python_version": sys.version.split()[0],
+            "platform": platform.platform(),
+            "executable": sys.executable,
+            "cwd": os.getcwd(),
+            "script_path": os.path.abspath(__file__),
+        },
+        "git": git_info,
+        "query": {
+            "repo": f"{owner}/{repo}",
+            "branch": args.branch,
+            "count": args.count,
+            "filter": args.filter_type,
+            "with_sg_date": bool(args.with_sg_date),
+            "with_github_date": bool(args.with_github_date),
+            "format": args.fmt,
+            "no_cache": bool(args.no_cache),
+        },
+        "cache": {
+            "path": cache_path,
+            "exists": cache_exists,
+            "age_seconds": cache_age,
+            "ttl_seconds": CACHE_TTL,
+            "would_use_cache": (
+                cache_exists
+                and (cache_age is not None and cache_age < CACHE_TTL)
+                and not args.no_cache
+            ),
+        },
+        "env": {
+            "tools_env_file_exists": os.path.isfile("tools/.env"),
+            "token_presence": {k: bool(os.environ.get(k, "").strip()) for k in DIAG_TOKEN_KEYS},
+            "sourcegraph_url": os.environ.get("SOURCEGRAPH_URL", DEFAULT_SG_URL).strip() or DEFAULT_SG_URL,
+            "jira_base_url_present": bool(os.environ.get("JIRA_BASE_URL", "").strip()),
+        },
+    }
 
 # ---------------------------------------------------------------------------
 # Generic HTTP with retry
@@ -602,8 +691,7 @@ def run_pipeline(branch, count, owner, repo, filter_type, with_sg, with_gh, no_c
     jira_url = os.environ.get("JIRA_BASE_URL", "").strip()
     jira_token = os.environ.get("JIRA_API_TOKEN", "").strip()
 
-    cache_key = f"{owner}_{repo}_{branch}_{count}_{filter_type}"
-    cache_path = os.path.join(CACHE_DIR, f"release_cache_{hashlib.md5(cache_key.encode()).hexdigest()[:12]}.json")
+    cache_path = _cache_path(owner, repo, branch, count, filter_type)
 
     if not no_cache and os.path.isfile(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
@@ -981,6 +1069,10 @@ def main():
                         default="table", help="Output format (default: table)")
     parser.add_argument("--output", help="Save output to file")
     parser.add_argument("--no-cache", action="store_true", help="Skip cache")
+    parser.add_argument("--diagnostics", action="store_true",
+                        help="Print non-secret runtime/config diagnostics to stderr")
+    parser.add_argument("--diagnostics-only", action="store_true",
+                        help="Print diagnostics and exit without querying APIs")
     parser.add_argument("--repo", default=f"{DEFAULT_OWNER}/{DEFAULT_REPO}",
                         help=f"Repository (default: {DEFAULT_OWNER}/{DEFAULT_REPO})")
     args = parser.parse_args()
@@ -988,6 +1080,14 @@ def main():
     if "/" not in args.repo:
         raise ConfigError(f"--repo must be owner/name, got: {args.repo}")
     owner, repo = args.repo.split("/", 1)
+
+    load_env()
+    if args.diagnostics or args.diagnostics_only:
+        diag = build_diagnostics(args, owner, repo)
+        print("[diagnostics] release_query context", file=sys.stderr)
+        print(json.dumps(diag, indent=2, sort_keys=True), file=sys.stderr)
+        if args.diagnostics_only:
+            return
 
     data = run_pipeline(
         args.branch, args.count, owner, repo,

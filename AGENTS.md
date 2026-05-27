@@ -202,3 +202,13 @@ Usage: `python3.14 agent_runner.py "Extract last 5 releases from master and upda
 - When updating Confluence, report exact counts of added/skipped entries.
 - If auth or config fails, report the exact blocker and suggest next action.
 - For Gerrit repositories, push to `refs/for/<branch>` for review — never push directly.
+
+## Cursor Cloud specific instructions
+
+- **No external dependencies**: All Python scripts use stdlib only. No `pip install` or `requirements.txt` needed.
+- **Runtime**: Python 3.6+ and Bash. The VM ships with Python 3.12 which works fine.
+- **Secrets**: The pipeline requires `GITHUB_TOKEN`, `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `CONFLUENCE_BASE_URL`, `CONFLUENCE_EMAIL`, `CONFLUENCE_API_TOKEN`, and `CONFLUENCE_PAGE_ID`. These are injected as environment variables. The `src/.env` file is **not** in the repo; the pipeline script (`run_goldimage_pipeline.sh`) sources it if present, but env vars already in the shell take precedence.
+- **Internal services**: Jira and Confluence are internal Nutanix services. DNS resolution for these may fail from Cloud Agent VMs. The `extract` action (GitHub-only) works reliably; the `update`/`pipeline` actions that contact Jira/Confluence will only work if the VM can reach those internal hosts.
+- **No tests, no linter, no build step**: This is a pure scripting/automation project. Validation is done by running the pipeline against live APIs.
+- **Running the pipeline**: Use `src/run_goldimage_pipeline.sh` as documented in the README. The `extract` action is the safest to run without side effects. Use `--dry-run` with `pipeline` to avoid writing to Confluence.
+- **Output files**: Extracted JSON is saved to `/tmp/release_graphql_<branch>_<count>.json` by default.

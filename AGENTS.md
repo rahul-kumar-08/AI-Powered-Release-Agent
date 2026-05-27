@@ -202,3 +202,23 @@ Usage: `python3.14 agent_runner.py "Extract last 5 releases from master and upda
 - When updating Confluence, report exact counts of added/skipped entries.
 - If auth or config fails, report the exact blocker and suggest next action.
 - For Gerrit repositories, push to `refs/for/<branch>` for review — never push directly.
+
+## Cursor Cloud specific instructions
+
+### Environment
+
+- **Python 3.12** is pre-installed; no external packages are required — all tools use stdlib only.
+- API tokens (`GITHUB_TOKEN`, `SOURCEGRAPH_TOKEN`, `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `CONFLUENCE_BASE_URL`, `CONFLUENCE_API_TOKEN`, `CONFLUENCE_PAGE_ID`) are injected as environment variables via Cursor Secrets. No `tools/.env` file is needed in cloud; the tools read `os.environ` first and fall back to `tools/.env`.
+- `cursor-sdk` (needed only by `agent_runner.py`) cannot be installed due to PyPI egress restrictions. Use `agent_runner.py --steps-json <file>` to bypass the SDK, or invoke tools directly.
+
+### Running tools
+
+- All commands should be run from the repo root (`/workspace`).
+- The primary entry point is `python3 tools/release_query.py` — see README for flags.
+- `release_query.py` takes ~100-110s per invocation (concurrent GitHub + Sourcegraph + Jira lookups). Use `--no-cache` to force fresh API calls.
+- Standalone `sourcegraph_tool.py` may fail with `ConnectionResetError` due to cloud egress restrictions. Sourcegraph queries work correctly when run through `release_query.py`.
+- Confluence publishing (`confluence_tool.py`) requires `CONFLUENCE_BASE_URL` and `CONFLUENCE_API_TOKEN` secrets to be configured.
+
+### Linting / testing
+
+- There is no linter or test suite configured in this repository. Validate tool behavior by running CLI commands with `--help` and against live data (e.g. `python3 tools/release_query.py --branch master --count 1 --no-cache`).

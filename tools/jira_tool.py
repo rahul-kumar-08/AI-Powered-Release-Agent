@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Search Jira for AOS Epic tickets based on release versions extracted from GitHub.
+Jira Tool — Self-contained HTTP client for Jira Epic search.
 
-Reads the release JSON produced by github_release_extractor_graphql.py,
+Reads the release JSON produced by github_tool.py / github_release_extractor_graphql.py,
 identifies the AOS version for each release, and queries Jira to find the
 corresponding Epic ticket.
 
-Outputs a table in the format:
-  GoldImage Version | Main Tickets | Change Log | RPM List | Merge Date | Notes
+All public functions raise typed exceptions from tools.exceptions so the
+orchestrator can retry transient failures.
 
 Usage:
-  python3 search_jira_epic.py --input-json <path> --branch <branch>
-  python3 search_jira_epic.py --input-json /tmp/release_graphql_master_10.json --branch master
+  python3 tools/jira_tool.py --input-json <path> --branch <branch>
+  python3 tools/jira_tool.py --input-json /tmp/release_graphql_master_10.json --branch master
 
-Environment variables (from src/.env):
+Environment variables (from tools/.env):
   JIRA_BASE_URL   — Jira server URL (e.g. https://jira.nutanix.com)
   JIRA_API_TOKEN  — Jira personal access token (Bearer token)
 """
@@ -23,10 +23,21 @@ import json
 import os
 import re
 import sys
-import urllib.request
-import urllib.parse
 import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
+
+try:
+    from tools.exceptions import (
+        ToolError, AuthError, ConfigError, HttpError, NetworkError, DataError,
+        RateLimitError,
+    )
+except ModuleNotFoundError:
+    from exceptions import (
+        ToolError, AuthError, ConfigError, HttpError, NetworkError, DataError,
+        RateLimitError,
+    )
 
 ENDOR_BASE_URL = "http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master"
 
@@ -35,46 +46,85 @@ KERNEL_MAP = {
 }
 
 
-def get_env_or_exit(name):
+# ---------------------------------------------------------------------------
+# Environment helpers
+# ---------------------------------------------------------------------------
+
+def _require_env(name):
+    """Return env var value or raise ConfigError."""
     val = os.environ.get(name, "").strip()
     if not val:
-        print(f"Error: {name} is not set. Add it to src/.env or export it.", file=sys.stderr)
-        sys.exit(2)
+        raise ConfigError(f"{name} is not set. Add it to tools/.env or export it.")
     return val
 
 
+def load_env(env_path="tools/.env"):
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            val = val.strip().strip("\"'")
+            os.environ.setdefault(key.strip(), val)
+
+
+# ---------------------------------------------------------------------------
+# HTTP helpers
+# ---------------------------------------------------------------------------
+
+def _jira_request(base_url, token, method, path, body=None, timeout=30):
+    """Low-level Jira HTTP call. Raises typed exceptions."""
+    url = f"{base_url.rstrip('/')}{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    data = json.dumps(body).encode("utf-8") if body else None
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        msg = f"Jira HTTP {exc.code} on {method} {path}: {detail}"
+        if exc.code in (401, 403):
+            raise AuthError(msg, status_code=exc.code)
+        if exc.code == 429:
+            raise RateLimitError(msg, retry_after=exc.headers.get("Retry-After"))
+        raise HttpError(msg, status_code=exc.code)
+    except urllib.error.URLError as exc:
+        raise NetworkError(f"Jira network error on {method} {path}: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Jira search functions
+# ---------------------------------------------------------------------------
+
 def jira_search(base_url, token, jql, fields="key,summary", max_results=10):
-    """Execute a JQL search and return the list of issues."""
+    """Execute a JQL search. Returns list of issue dicts."""
     params = urllib.parse.urlencode({
         "jql": jql,
         "fields": fields,
         "maxResults": max_results,
     })
-    url = f"{base_url}/rest/api/2/search?{params}"
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-            return data.get("issues", [])
-    except urllib.error.HTTPError as e:
-        print(f"Jira API error: {e.code} {e.reason}", file=sys.stderr)
-        return []
-    except Exception as e:
-        print(f"Jira request failed: {e}", file=sys.stderr)
-        return []
+    data = _jira_request(base_url, token, "GET", f"/rest/api/2/search?{params}")
+    return data.get("issues", [])
 
 
 def find_aos_epic(base_url, token, version_string):
     """
     Search Jira for an AOS Epic matching the release version.
-    version_string example: main-master-rhel9.7-9.0.0
+    Returns the Epic key (e.g. "AOS-12345") or None.
     """
-    jql = (
-        f'issuetype = Epic AND summary ~ "Release gold image {version_string}"'
-    )
+    jql = f'issuetype = Epic AND summary ~ "Release gold image {version_string}"'
     issues = jira_search(base_url, token, jql, max_results=5)
 
     for issue in issues:
@@ -89,25 +139,21 @@ def find_aos_epic(base_url, token, version_string):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Version / URL helpers
+# ---------------------------------------------------------------------------
+
 def extract_aos_version(release_title):
-    """
-    Extract the AOS version from a release PR title.
-    Example: "Release gold image main-master-rhel9.7-9.0.0/PC:..." -> "main-master-rhel9.7-9.0.0"
-    """
+    """Extract AOS version from a release PR title."""
     match = re.search(
         r"[Rr]elease [Gg]old [Ii]mage (main-master-rhel[\d.]+-[\d.]+)",
-        release_title
+        release_title,
     )
-    if match:
-        return match.group(1)
-    return None
+    return match.group(1) if match else None
 
 
 def parse_version_parts(aos_version):
-    """
-    Parse main-master-rhel9.7-9.0.0 into (rhel_major, rhel_minor, release_version).
-    Returns (9, 7, "9.0.0") or None.
-    """
+    """Parse main-master-rhel9.7-9.0.0 -> (rhel_major, rhel_minor, release_version)."""
     match = re.match(r"main-master-rhel(\d+)\.(\d+)-([\d.]+)", aos_version)
     if match:
         return int(match.group(1)), int(match.group(2)), match.group(3)
@@ -115,35 +161,24 @@ def parse_version_parts(aos_version):
 
 
 def get_kernel_version(rhel_major):
-    """Get the kernel version for a given RHEL major version."""
     return KERNEL_MAP.get(str(rhel_major), "5.14.0")
 
 
 def build_goldimage_version(aos_version, kernel_version):
-    """
-    Build the GoldImage version string.
-    main-master-rhel9.7-9.0.0 + kernel 5.14.0 -> main-master-rhel9.7-5.14.0-9.0.0
-    """
+    """Insert kernel version: main-master-rhel9.7-9.0.0 -> main-master-rhel9.7-5.14.0-9.0.0"""
     match = re.match(r"(main-master-rhel[\d.]+)-([\d.]+)", aos_version)
     if match:
-        prefix = match.group(1)
-        release = match.group(2)
-        return f"{prefix}-{kernel_version}-{release}"
+        return f"{match.group(1)}-{kernel_version}-{match.group(2)}"
     return aos_version
 
 
 def build_endor_url(rhel_major, rhel_minor, kernel_version, release_version, filename):
-    """
-    Build the endor URL for changelog.txt or rpm.txt.
-    Pattern: RHEL97-SVM-9.7-k5.14.0-r9.0.0.x86_64/
-    """
     rhel_tag = f"RHEL{rhel_major}{rhel_minor}"
     folder = f"{rhel_tag}-SVM-{rhel_major}.{rhel_minor}-k{kernel_version}-r{release_version}.x86_64"
     return f"{ENDOR_BASE_URL}/{folder}/{filename}"
 
 
 def format_merge_date(iso_date):
-    """Convert ISO date to DD-Mon-YYYY format."""
     try:
         dt = datetime.strptime(iso_date[:19], "%Y-%m-%dT%H:%M:%S")
         return dt.strftime("%d-%b-%Y")
@@ -152,7 +187,7 @@ def format_merge_date(iso_date):
 
 
 def check_url_exists(url):
-    """Check if a URL is valid (returns 2xx or 3xx). Returns False for 404 or errors."""
+    """HEAD-check a URL. Returns False for 404 or network errors."""
     req = urllib.request.Request(url, method="HEAD")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -163,17 +198,23 @@ def check_url_exists(url):
         return False
 
 
+# ---------------------------------------------------------------------------
+# Main CLI
+# ---------------------------------------------------------------------------
+
 def main():
-    parser = argparse.ArgumentParser(description="Search Jira for AOS Epic tickets")
+    load_env()
+
+    parser = argparse.ArgumentParser(description="Jira Tool — AOS Epic search")
     parser.add_argument("--input-json", required=True, help="Path to release extractor JSON")
     parser.add_argument("--branch", required=True, help="Branch name (for Notes column)")
-    parser.add_argument("--output-json", help="Optional: save enriched output to JSON")
+    parser.add_argument("--output-json", help="Save enriched output to JSON")
     parser.add_argument("--format", choices=["table", "json"], default="table",
                         help="Output format (default: table)")
     args = parser.parse_args()
 
-    jira_base_url = get_env_or_exit("JIRA_BASE_URL")
-    jira_token = get_env_or_exit("JIRA_API_TOKEN")
+    jira_base_url = _require_env("JIRA_BASE_URL")
+    jira_token = _require_env("JIRA_API_TOKEN")
 
     with open(args.input_json) as f:
         data = json.load(f)
@@ -254,9 +295,12 @@ def main():
             )
 
     if not results:
-        print("No releases found in the input JSON.", file=sys.stderr)
-        sys.exit(1)
+        raise DataError("No releases found in the input JSON.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ToolError as exc:
+        print(f"Error [{type(exc).__name__}]: {exc}", file=sys.stderr)
+        sys.exit(2 if isinstance(exc, ConfigError) else 1)

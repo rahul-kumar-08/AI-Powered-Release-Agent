@@ -1,0 +1,103 @@
+# GoldImage Release Table — Default Output Format
+
+When the user asks for releases/release data from any branch, present the results in this table format by default. Only change columns when the user explicitly asks for specific columns or data.
+
+## Default columns
+
+| Column | Description |
+|--------|-------------|
+| GoldImage Version | Constructed as `main-{branch}-rhel{X.Y}-{kernel}-{release}` (e.g. `main-master-rhel9.7-5.14.0-9.2.0`). Append `(AOS)` or `(PC)` tag when the release PR contains both AOS and PC components. |
+| Main Ticket | **One Epic ticket per row.** Extracted from the release PR body or Jira (see extraction rules below). |
+| Change Log | `[changelog](<endor_url>/changelog.txt)` — link to endor changelog |
+| RPM List | `[rpm](<endor_url>/rpm.txt)` — link to endor RPM list |
+| Merge Date | DD-Mon-YYYY format (e.g. `22-May-2026`). This is the **Gerrit CR merge date** from `nugerrit.ntnxdpro.com/main` (via Sourcegraph), not the GitHub PR merge date. |
+| Notes | **Release branch as per the CR.** For non-master branches, this is the Gerrit stable branch where the CR was auto-submitted (e.g. `ganges-7.3.1.10-stable-pc` for PC, `ganges-7.5.1.4-stable` for AOS). Resolved from the EPIC Jira ticket's fix version. For master, this column is omitted (CRs go directly to `nugerrit.ntnxdpro.com/main`). |
+
+## AOS / PC row splitting
+
+Combined release PRs (title contains `/PC:` or `/main-`) produce **two separate rows** — one for AOS, one for PC. Each row has its own GoldImage Version, its own Main Ticket, and its own Endor URLs.
+
+**Example:** PR title `Release gold image main-master-rhel9.7-9.2.0/PC:Release gold image main-master-rhel9.7-7.1.0` becomes:
+
+| GoldImage Version | Main Ticket |
+|---|---|
+| main-master-rhel9.7-5.14.0-9.2.0 (AOS) | ENG-928113 |
+| main-master-rhel9.7-5.14.0-7.1.0 (PC) | ENG-928123 |
+
+AOS-only releases produce a single row without a tag.
+
+## Main Ticket extraction
+
+Each row must contain exactly **one** Epic ticket. Follow this priority:
+
+### Priority 1 — PR body `Epic's:` line
+
+Parse the release PR body for a line matching `Epic's\s*:\s*(.+)`.
+
+- **Single Epic** (AOS-only release): use that ticket directly.
+- **Two Epics** (combined AOS/PC release): the first Epic corresponds to AOS, the second to PC. Assign one per row.
+- If the PR body has a line like `Epic's: ENG-924969, ENG-925020`, then:
+  - AOS row → `ENG-924969`
+  - PC row → `ENG-925020`
+
+### Priority 2 — Jira Epic search (fallback)
+
+If no `Epic's:` line is found in the PR body, search Jira:
+
+```
+issuetype = Epic AND summary ~ "<goldimage-version>" ORDER BY created DESC
+```
+
+Where `<goldimage-version>` is the version string from the PR title (e.g. `main-master-rhel9.7-9.2.0`).
+
+For combined AOS/PC releases, run the Jira search separately for each version:
+- AOS: `summary ~ "main-master-rhel9.7-9.2.0"`
+- PC: `summary ~ "main-master-rhel9.7-7.1.0"`
+
+Use the `key` from the first result as the Main Ticket.
+
+### Priority 3 — Not found
+
+If neither source yields an Epic, show `—` in the Main Ticket column.
+
+## GoldImage Version construction
+
+From the release PR title `Release gold image main-master-rhel9.7-9.2.0`:
+1. Extract: `rhel_part = main-master-rhel9.7`, `release = 9.2.0`
+2. Determine kernel version:
+   - rhel9.x → `5.14.0`
+   - rhel8.x → extract from title (e.g. `5.10.245`)
+3. Result: `main-master-rhel9.7-5.14.0-9.2.0`
+
+For combined releases, construct separate versions for AOS and PC parts.
+
+## Endor URL construction
+
+Base: `http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master/`
+
+Directory pattern: `RHEL{major}{minor}-SVM-{major}.{minor}-k{kernel}-r{release}.x86_64/`
+
+Example for `main-master-rhel9.7-5.14.0-9.0.0`:
+- `RHEL97-SVM-9.7-k5.14.0-r9.0.0.x86_64/`
+- changelog: `http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master/RHEL97-SVM-9.7-k5.14.0-r9.0.0.x86_64/changelog.txt`
+- rpm: `http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master/RHEL97-SVM-9.7-k5.14.0-r9.0.0.x86_64/rpm.txt`
+
+Construct Endor URLs separately for AOS and PC rows using their respective version numbers.
+
+## Merge Date format
+
+Convert ISO 8601 timestamps to `DD-Mon-YYYY` (e.g. `2026-05-22T07:10:17Z` → `22-May-2026`).
+
+The Merge Date is the **Gerrit CR merge date** from `nugerrit.ntnxdpro.com/main` (queried via Sourcegraph `commit_search`), not the GitHub PR merge date. The Gerrit date is typically earlier because the CR is auto-submitted by `svc.jenkins.autosub` before syncing to GitHub.
+
+When the user explicitly asks for both GitHub and Sourcegraph/Gerrit dates, add separate columns:
+- `GitHub Merge Date` — from the GitHub PR `mergedAt`
+- `Sourcegraph Merge Date` — from the Gerrit commit date via Sourcegraph
+
+## Notes
+
+- Latest releases first (descending merge date).
+- Combined AOS/PC releases: AOS row appears first, PC row immediately below, both sharing the same Merge Date.
+- Each row has exactly one Main Ticket — never combine multiple Epics in a single cell.
+- This is the DEFAULT format. Switch to other formats only when user explicitly requests different columns.
+- The default Merge Date column uses the Gerrit CR merge date. GitHub PR merge date is only shown when explicitly requested.

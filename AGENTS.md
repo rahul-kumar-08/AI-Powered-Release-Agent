@@ -6,6 +6,7 @@ You are a **Release Agent** for the `nutanix-core/aos-goldimage-os` repository.
 
 **Scope:**
 - Extract release PR data from GitHub (branches, counts, associated PRs, tickets, CI links).
+- Validate CR merge status via Sourcegraph/Gerrit.
 - Present release information in tabular format.
 - Update the Confluence release table when explicitly instructed.
 
@@ -16,117 +17,188 @@ You are a **Release Agent** for the `nutanix-core/aos-goldimage-os` repository.
 
 ## Project Overview
 
-This project automates the extraction of GitHub release PR data and publishes it to a Confluence release table. It targets the `nutanix-core/aos-goldimage-os` repository.
+This project automates the extraction of GitHub release PR data, validates merge status on Gerrit via Sourcegraph, and publishes release tables to Confluence. It targets the `nutanix-core/aos-goldimage-os` repository.
 
 ## Architecture
 
 ```
-AI_POC/
+AI-Powered-Release-Agent/
 ├── AGENTS.md
+├── README.md
+├── agent_runner.py                  # Mission decomposition + tool dispatch (cursor-sdk)
 ├── .cursor/rules/
-│   ├── mcp.json                                    # MCP server config (GitHub, Sourcegraph, Atlassian, etc.)
-│   ├── confluence-release-update-workflow.mdc       # Always-apply workflow rule
-│   ├── release-agent.mdc                            # Always-apply agent identity + MCP workflow
-│   └── release-report-format.mdc                    # Always-apply output format rule
-└── src/
-    ├── .env                                 # Secrets (DO NOT commit)
-    ├── github_release_extractor_graphql.py  # Fallback: fetches release PRs via GitHub GraphQL API
-    ├── update_confluence_release_table.py   # Pushes extracted release data to Confluence table
-    └── run_release_mission.sh              # Fallback runner: extract, update, or both
+│   ├── mcp.json                     # MCP server config (GitHub, Sourcegraph, Atlassian, etc.)
+│   ├── confluence-release-update-workflow.mdc  # Always-apply workflow rule
+│   ├── release-agent.mdc            # Always-apply agent identity + MCP workflow
+│   └── goldimage-table-format.mdc   # Always-apply output format rule
+└── tools/
+    ├── .env                         # Secrets (DO NOT commit)
+    ├── exceptions.py                # Typed exception hierarchy (ToolError, AuthError, etc.)
+    ├── release_query.py             # Fast-path: concurrent GitHub+SG+Jira pipeline (preferred)
+    ├── github_tool.py               # GitHub release extraction via REST API
+    ├── jira_tool.py                 # Jira Epic ticket search
+    ├── confluence_tool.py           # Confluence table updater with auto page routing
+    └── sourcegraph_tool.py          # Sourcegraph/Gerrit release merge validation (AOS/PC split)
 ```
 
 ## Key Components
 
-### `src/github_release_extractor_graphql.py`
+### `tools/release_query.py`
 
-Python 3 CLI tool (no external dependencies beyond stdlib). Extracts release versions, Jira tickets, CI links, associated PRs, and commit details from GitHub using the GraphQL API. Includes built-in retry with exponential backoff for transient GitHub errors (502/503/429).
+**Fast-path unified pipeline.** Runs GitHub + Sourcegraph/Gerrit + Jira lookups concurrently using `ThreadPoolExecutor`. ~5x faster than sequential MCP calls. Includes a file-based cache (5 min TTL) to skip API calls on repeated queries.
 
-Key flags:
-- `--repo owner/name` — target repository
-- `--mode prs|commits|both` — data source
-- `--branch` / `--base-branch` — branch to scan
-- `--pr-title-regex` — filter release PRs (default: `^Release`)
-- `--latest-release-pr-count N` — limit to latest N releases
-- `--history-pr-limit` / `--history-commit-limit` — how far back to look
-- `--output-json` — save structured JSON output
-
-### `src/update_confluence_release_table.py`
-
-Python 3 CLI tool that reads the extractor JSON output and updates a Confluence page's release table. Deduplicates by release title, inserts new releases at the top. Uses Bearer token auth for Confluence Data Center.
+Key capabilities:
+- **Revert detection**: Builds a per-version timeline of release/revert events; excludes versions whose latest event is a revert.
+- **AOS/PC classification**: Splits combined titles on `/PC:` and detects `ganges-pc.` in version strings to prevent misclassification.
+- **Gerrit branch resolution**: For non-master branches, resolves the correct Gerrit branch from the EPIC Jira ticket's fix version using numeric comparison.
+- **Git tracker fallback**: For branches where fix-version resolution is insufficient (e.g. `ganges-7.6`), parses `===git tracker===` comments from Jira EPIC tickets to extract Gerrit branch and commit date.
 
 Key flags:
-- `--input-json <path>` — path to extractor JSON output
-- `--max-releases N` — max releases to process (0 = all)
-- `--dry-run` — preview changes without updating
-
-### `src/run_release_mission.sh`
-
-Unified bash runner that sources `.env`, runs extraction and/or Confluence update, and prints a summary table. Supports comma-separated multi-branch runs.
-
-Usage: `src/run_release_mission.sh <action> <branch[,branch,...]> <count> [json_path]`
-
-Actions:
-- `extract` — Fetch release PRs from GitHub and save JSON only
-- `update` — Update Confluence from an existing JSON file only
-- `both` — Extract from GitHub then update Confluence
+- `--branch` — branch to scan (default: `master`)
+- `--count N` — latest N releases (default: 5)
+- `--filter all|aos|pc` — filter output rows
+- `--with-sg-date` — add Sourcegraph/Gerrit merge date column
+- `--with-github-date` — add GitHub PR merge date column
+- `--format table|json` — output format
+- `--output <path>` — save to file
+- `--no-cache` — force fresh API calls
 
 Examples:
 ```bash
-src/run_release_mission.sh extract master 1
-src/run_release_mission.sh extract "master,ganges-7.6,ganges-7.5,ganges-7.3" 1
-src/run_release_mission.sh both ganges-7.5 10
-src/run_release_mission.sh update master 5 /tmp/release_graphql_master_5.json
+python3 tools/release_query.py --branch master --count 5
+python3 tools/release_query.py --branch ganges-7.5 --count 10 --filter pc --with-sg-date --with-github-date
+python3 tools/release_query.py --branch master --count 10 --format json --output /tmp/out.json
 ```
 
-### `src/release_confluence_mission_prompt.md`
+### `tools/github_tool.py`
 
-Template prompt for executing the full workflow inside Cursor chat. Copy/paste into chat with branch and count values filled in.
+Python 3 CLI tool that extracts release PRs, associated PRs, and CI status from GitHub using the REST API. Supports retry with exponential backoff.
 
-## Required Environment Variables (in `src/.env`)
+Key flags:
+- `--repo owner/name` — target repository
+- `--branch` — branch to scan
+- `--count N` — latest N releases
+- `--ci-status` — include postmerge CircleCI status
+- `--output-json` — save structured JSON output
+- `--mode prs|commits|both` — data source
+- `--include-comments` — parse PR comments for tickets/commands
+
+### `tools/sourcegraph_tool.py`
+
+Self-contained HTTP client for Sourcegraph. Validates release CR merge status by querying the **Gerrit repo** (`nugerrit.ntnxdpro.com/main`) via Sourcegraph's stream API. This is the source of truth for CR merges — CRs are auto-submitted by `svc.jenkins.autosub` on Gerrit before syncing to GitHub. Splits combined AOS/PC release titles (separated by `/PC:`) and validates each component independently. Detects reverted releases. Raises typed exceptions.
+
+Key flags:
+- `--input-json <path>` — path to github_tool.py release JSON
+- `--pr-titles` — semicolon-separated PR titles to validate directly
+- `--output-json` — save validated output to JSON
+- `--format table|json` — output format
+
+Required env var: `SOURCEGRAPH_TOKEN`
+
+### `tools/jira_tool.py`
+
+Self-contained HTTP client for Jira Epic search. Reads release JSON, extracts AOS versions, and queries Jira REST API. Raises typed exceptions.
+
+Key flags:
+- `--input-json <path>` — path to release extractor JSON
+- `--branch` — branch name for Notes column
+- `--output-json` — save enriched JSON output
+- `--format table|json` — output format
+
+### `tools/confluence_tool.py`
+
+Self-contained HTTP client for Confluence table updates with **automatic page routing**. Uses `CONFLUENCE_PAGE_ID` as the parent page and automatically discovers or creates child pages for each branch + release type (AOS/PC) combination.
+
+Key capabilities:
+- **Auto page routing**: Lists child pages under the parent, matches by branch name + type in title, creates new child pages if needed (e.g. "PC Release ganges-7.3").
+- **URL validation**: Validates changelog and RPM URLs via parallel HEAD checks; invalid links show "Data not found".
+- **Sorted table rebuild**: When adding rows, rebuilds the entire table sorted by merge date (newest first). Existing rows are preserved and re-sorted alongside new ones.
+- **Force rebuild**: `--force-rebuild` rebuilds the table from JSON data even when no new rows to add — useful for fixing ordering or URL issues on existing pages.
+
+Key flags:
+- `--input-json <path>` — path to extractor JSON output
+- `--branch` — branch name
+- `--type AOS|PC` — release type (auto-detected from JSON if omitted)
+- `--max-releases N` — max releases to process (0 = all)
+- `--force-rebuild` — rebuild entire table even if no new rows
+- `--dry-run` — preview changes without updating
+
+### `tools/exceptions.py`
+
+Typed exception hierarchy used by all `*_tool.py` files. The orchestrator (`agent_runner.py`) inspects the exception type in subprocess stderr to decide whether to retry.
+
+Exception classes:
+- `ToolError` — base (carries `retryable` flag)
+- `AuthError` — 401/403, never retryable
+- `ConfigError` — missing env var, never retryable
+- `RateLimitError` — 429, always retryable
+- `HttpError` — other HTTP errors, retryable for 502/503/504
+- `NetworkError` — DNS/timeout, always retryable
+- `NotFoundError` — 404, never retryable
+- `DataError` — parse/validation, never retryable
+
+### `agent_runner.py`
+
+Mission decomposition + tool dispatch script at project root. Uses `cursor-sdk` (Python 3.10+) to decompose natural language missions into ordered tool steps, then dispatches each step with retry logic.
+
+Usage: `python3.14 agent_runner.py "Extract last 5 releases from master and update confluence"`
+
+## Required Environment Variables (in `tools/.env`)
 
 | Variable | Purpose |
 |----------|---------|
 | `GITHUB_TOKEN` | GitHub PAT with repo read access |
 | `CONFLUENCE_BASE_URL` | Confluence server URL |
-| `CONFLUENCE_EMAIL` | Confluence user email |
 | `CONFLUENCE_API_TOKEN` | Confluence API token or PAT |
-| `CONFLUENCE_PAGE_ID` | Target Confluence page ID for the release table |
+| `CONFLUENCE_PAGE_ID` | **Parent page ID** — child pages auto-resolved per branch/type |
+| `SOURCEGRAPH_TOKEN` | Sourcegraph access token for Gerrit merge validation |
+| `JIRA_BASE_URL` | Jira server URL |
+| `JIRA_API_TOKEN` | Jira personal access token (Bearer) |
 
 ## Workflow
 
-### Primary: MCP-based extraction
+### Primary: fast-path via `release_query.py`
 
 1. User asks for release data from one or more branches.
-2. Agent uses **GitHub MCP tools** (`search_issues`, `get_pull_request`, `list_pull_requests`) to fetch release PR metadata directly.
-3. Agent computes release windows, filters reverts, and collects associated PRs.
-4. Agent presents results in tabular format (Release Key, Release Title, Release Merged At, Associated PRs).
-5. If user requests Confluence update, agent runs `run_release_mission.sh both` or `update`.
-6. Agent reports exact counts of added/skipped entries.
+2. Agent runs `python3 tools/release_query.py` with appropriate flags.
+3. Script concurrently fetches GitHub releases, validates via Sourcegraph/Gerrit, and looks up Jira Epics.
+4. Agent displays the table output directly.
+5. If user requests Confluence update, agent runs `release_query.py --format json --output <path>`, then `confluence_tool.py --input-json <path> --branch <branch>`.
 
-### Fallback: script-based extraction
+### Fallback 1: MCP-based extraction
 
-1. User asks for release data from one or more branches.
-2. Agent runs `run_release_mission.sh extract` to fetch release PR metadata from GitHub.
+1. If `release_query.py` fails, agent uses **GitHub MCP tools** (`search_issues`, `get_pull_request`, `list_pull_requests`) to fetch release PR metadata.
+2. Agent validates CR merge status via **Sourcegraph MCP tools** (`commit_search`) against the **Gerrit repo** (`nugerrit.ntnxdpro.com/main`). A GitHub PR merge does NOT mean the CR is merged.
 3. Agent presents results in tabular format.
-4. If user requests Confluence update, agent runs `run_release_mission.sh both` or `update`.
-5. Agent reports exact counts of added/skipped entries.
+4. If user requests Confluence update, agent exports JSON and runs `confluence_tool.py`.
+
+### Fallback 2: direct tool invocation
+
+1. If MCP tools are also unavailable, agent runs individual tools (`github_tool.py`, `sourcegraph_tool.py`, `jira_tool.py`) directly.
+2. Agent presents results in tabular format.
+3. For Confluence update, agent pipes output through `confluence_tool.py`.
 
 ## Conventions
 
 - Release PRs are identified by title matching `^Release`.
-- Reverted release PRs are excluded until a new release merges.
-- Confluence table is deduplicated by release title; latest releases go on top.
-- All timestamps are UTC.
-- Output JSON uses the structure found in `release_graphql.json`.
+- **GitHub PR merge ≠ CR merge.** A PR merged in GitHub does not mean the code review (CR) is merged. The Gerrit repo (`nugerrit.ntnxdpro.com/main`) is the source of truth for CR merge status and date. CRs are auto-submitted by `svc.jenkins.autosub` on Gerrit, then synced to GitHub.
+- Combined AOS/PC release titles are split on `/PC:` and each component is validated independently via Sourcegraph against the Gerrit repo.
+- Versions containing `ganges-pc.` are classified as PC releases, not AOS.
+- Sourcegraph `commit_search` shows the original author; the committer on Gerrit is `svc.jenkins.autosub`.
+- Reverted release PRs are excluded using version-based timeline analysis.
+- Confluence tables are deduplicated by GoldImage version; rows are sorted newest-first.
+- Invalid changelog/RPM URLs are shown as "Data not found" (validated via HEAD requests).
+- `CONFLUENCE_PAGE_ID` is a parent page; child pages are auto-discovered/created per branch + type.
+- All timestamps are UTC, sourced from Gerrit commit dates via Sourcegraph.
 
 ## Agent Guidelines
 
-- Prefer **GitHub MCP tools** for release extraction; fall back to `run_release_mission.sh` if MCP is unavailable.
-- Always source `src/.env` before running scripts that need tokens.
+- Prefer **`tools/release_query.py`** (fast-path) for release extraction; fall back to MCP tools, then direct tool invocation.
+- Always source `tools/.env` before running scripts that need tokens.
 - Never commit or expose secrets from `.env`.
-- Use `run_release_mission.sh` as the script interface — avoid running Python scripts directly.
-- For multi-branch queries via MCP, repeat the workflow per branch. Via scripts, use comma-separated branches.
+- For Confluence updates, use `confluence_tool.py` directly — it handles page routing automatically.
+- Use `--force-rebuild` when existing pages need re-sorting or URL re-validation.
+- For multi-branch queries via MCP, repeat the workflow per branch.
 - When updating Confluence, report exact counts of added/skipped entries.
 - If auth or config fails, report the exact blocker and suggest next action.
-- Use `--history-pr-limit 2500` and `--history-commit-limit 10000` for production script runs to capture full release windows.
 - For Gerrit repositories, push to `refs/for/<branch>` for review — never push directly.

@@ -7,40 +7,49 @@ alwaysApply: true
 
 When the user asks to "update Confluence page" for release details, perform this workflow end-to-end unless blocked by missing credentials/auth.
 
-## Path A — MCP-based extraction (preferred)
+## Preferred workflow: release_query.py → confluence_tool.py
 
-1. **Extract via GitHub MCP tools** following the steps in `release-agent.mdc` (search_issues → get_pull_request → list_pull_requests → build release windows).
+1. **Extract releases** using `release_query.py` with `--format json --output <path>`:
+   ```bash
+   python3 tools/release_query.py --branch <branch> --count <N> --filter <aos|pc> --format json --output /tmp/release_<type>_<branch>_<N>.json --no-cache
+   ```
 2. **Display the release table** to the user for confirmation.
-3. **Update Confluence** using the script with an existing JSON, or run the full pipeline:
+3. **Update Confluence** using `confluence_tool.py`:
    ```bash
-   src/run_release_mission.sh both <branch[,branch,...]> <count>
+   CONFLUENCE_BASE_URL="https://confluence.eng.nutanix.com:8443" \
+   CONFLUENCE_API_TOKEN="<token>" \
+   python3 tools/confluence_tool.py --input-json <json_path> --branch <branch>
    ```
 
-If MCP extraction succeeds but the user only wants to push already-extracted data to Confluence:
+### Automatic page routing
+
+`CONFLUENCE_PAGE_ID` in `tools/.env` is the **parent page**. The tool automatically:
+- Discovers child pages under the parent
+- Matches by branch name + release type (AOS/PC) in the page title
+- Creates a new child page (e.g. "PC Release ganges-7.3") if none exists
+- Release type is auto-detected from the JSON data (PC if versions contain "pc", otherwise AOS)
+- Use `--type AOS` or `--type PC` to override auto-detection
+
+### Table management
+
+- **URL validation**: Changelog and RPM URLs are validated via parallel HEAD checks. Invalid links show "Data not found".
+- **Sorted rebuild**: When adding rows, the entire table is rebuilt with all rows sorted by merge date (newest first).
+- **Force rebuild**: Use `--force-rebuild` to rebuild the table from JSON even when no new rows need adding. This is useful to fix ordering or re-validate URLs on existing pages:
+  ```bash
+  python3 tools/confluence_tool.py --input-json <json_path> --branch <branch> --force-rebuild
+  ```
+
+### Confluence credentials
+
+- `CONFLUENCE_BASE_URL` and `CONFLUENCE_API_TOKEN` come from the Atlassian MCP server config in `.cursor/rules/mcp.json`
+- `CONFLUENCE_PAGE_ID` (parent page) is set in `tools/.env`
+- Do NOT hardcode page IDs per branch — the tool resolves them automatically
+
+## Fallback workflow
+
+Use `tools/run_goldimage_pipeline.sh` when `release_query.py` or `confluence_tool.py` are unavailable:
 ```bash
-src/run_release_mission.sh update <branch> <count> <json_path>
-```
-
-## Path B — Script-only workflow (fallback)
-
-Use when MCP tools are unavailable or fail:
-
-1. **Extract only** (user asks for release data without Confluence update):
-   ```bash
-   src/run_release_mission.sh extract <branch[,branch,...]> <count>
-   ```
-2. **Extract + update** (user asks to update Confluence):
-   ```bash
-   src/run_release_mission.sh both <branch[,branch,...]> <count>
-   ```
-3. **Update only** (JSON already exists, user asks to push to Confluence):
-   ```bash
-   src/run_release_mission.sh update <branch> <count> <json_path>
-   ```
-
-For multi-branch requests, pass comma-separated branches:
-```bash
-src/run_release_mission.sh both "master,ganges-7.6,ganges-7.5" 1
+tools/run_goldimage_pipeline.sh pipeline <branch[,branch,...]> <count>
 ```
 
 ## Report result clearly
@@ -53,9 +62,4 @@ src/run_release_mission.sh both "master,ganges-7.6,ganges-7.5" 1
 
 - Release PR title filter: `^Release`
 - Prefer merged Release PRs only
-- Include associated PRs between previous and current release in the table cell
-- Preserve table columns:
-  - Release Key
-  - Release Title
-  - Release Merged At (UTC)
-  - Associated PRs (Title + PR + Merged At UTC)
+- Use the default table format from `goldimage-table-format.mdc`

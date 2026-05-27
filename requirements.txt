@@ -1,0 +1,6 @@
+# Core tools (github_tool, sourcegraph_tool, jira_tool, confluence_tool,
+# release_query) use only the Python standard library — no third-party
+# packages required.
+
+# agent_runner.py uses the Cursor SDK for mission decomposition.
+cursor-sdk>=0.1.0

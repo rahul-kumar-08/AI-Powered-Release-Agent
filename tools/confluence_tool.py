@@ -41,7 +41,7 @@ try:
     from tools.jira_tool import (
         find_aos_epic, extract_aos_version as _jira_extract_aos_version,
         get_kernel_version, build_endor_url, format_merge_date,
-        check_url_exists, load_env,
+        check_url_exists, _load_env_file,
     )
 except ModuleNotFoundError:
     from exceptions import (
@@ -51,11 +51,10 @@ except ModuleNotFoundError:
     from jira_tool import (
         find_aos_epic, extract_aos_version as _jira_extract_aos_version,
         get_kernel_version, build_endor_url, format_merge_date,
-        check_url_exists, load_env,
+        check_url_exists, _load_env_file,
     )
 
 
-ENDOR_BASE_URL = "http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master"
 
 TABLE_COLUMNS = [
     "GoldImage Version",
@@ -72,6 +71,11 @@ TABLE_COLUMNS = [
 # ---------------------------------------------------------------------------
 
 def _require_env(name):
+    """Return env var: check runtime environment first, fall back to .env file."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    _load_env_file()
     val = os.environ.get(name, "").strip()
     if not val:
         raise ConfigError(f"{name} is not set. Add it to tools/.env or export it.")
@@ -114,35 +118,75 @@ def _extract_aos_version(release_title):
 # Release data enrichment
 # ---------------------------------------------------------------------------
 
-def _convert_release_query_rows(data, branch):
-    """Convert release_query.py JSON (has 'rows' key) to enriched format."""
+def _is_pc_row(row):
+    """Return True if this row is a PC release.
+    
+    Uses explicit comp_type from release_query.py JSON when available,
+    otherwise falls back to goldimage_version string matching.
+    """
+    ct = row.get("comp_type", "").upper()
+    if ct:
+        return ct == "PC"
+    gi = row.get("goldimage_version", "").lower()
+    if "(pc)" in gi:
+        return True
+    if "(aos)" in gi:
+        return False
+    if "pc." in gi or "-pc-" in gi:
+        return True
+    return False
+
+
+def _convert_release_query_rows(data, branch, release_type="AOS"):
+    """Convert release_query.py JSON (has 'rows' key) to enriched format.
+    
+    Filters rows to only include those matching *release_type* (AOS or PC)
+    and whose Jira main ticket is Closed.
+    """
     from concurrent.futures import ThreadPoolExecutor
 
     def _url(md):
         m = re.search(r"\((.+?)\)", md or "")
         return m.group(1) if m else None
 
+    filtered_rows = []
+    skipped_non_closed = 0
+    for r in data["rows"]:
+        jira_status = (r.get("jira_status") or "").lower()
+        if jira_status and jira_status != "closed":
+            skipped_non_closed += 1
+            continue
+        is_pc = _is_pc_row(r)
+        if release_type == "PC" and is_pc:
+            filtered_rows.append(r)
+        elif release_type == "AOS" and not is_pc:
+            filtered_rows.append(r)
+    if skipped_non_closed:
+        print(f"  Skipped {skipped_non_closed} row(s) with non-Closed Jira ticket")
+
     results = []
     urls_to_validate = []
 
-    for i, r in enumerate(data["rows"]):
+    for i, r in enumerate(filtered_rows):
         gi = r.get("goldimage_version", "")
         ticket = r.get("main_ticket", "N/A")
         changelog = r.get("changelog", "")
         rpm = r.get("rpm", "")
-        sg_date = r.get("sg_merge_date") or r.get("gh_merge_date") or ""
+        sg_date = r.get("sg_merge_date") or ""
+        gh_date = r.get("gh_merge_date") or ""
+        best_date = sg_date or gh_date
         notes = r.get("gerrit_ref") or branch
 
         cl_url = _url(changelog)
         rpm_url = _url(rpm)
 
         merge_date = ""
-        if sg_date:
+        if best_date:
             try:
-                dt = datetime.strptime(sg_date[:10], "%Y-%m-%d")
+                dt = datetime.strptime(best_date[:10], "%Y-%m-%d")
                 merge_date = dt.strftime("%d-%b-%Y")
             except (ValueError, TypeError):
-                merge_date = sg_date[:10]
+                merge_date = best_date[:10]
 
         results.append({
             "goldimage_version": gi,
@@ -152,7 +196,7 @@ def _convert_release_query_rows(data, branch):
             "merge_date": merge_date,
             "notes": notes,
             "release_key": gi,
-            "merged_at_raw": sg_date or "",
+            "merged_at_raw": best_date,
         })
 
         if cl_url:
@@ -171,10 +215,11 @@ def _convert_release_query_rows(data, branch):
                     results[idx][key] = None
         print("done.")
 
+    results.sort(key=lambda x: x["merged_at_raw"], reverse=True)
     return results
 
 
-def enrich_releases(input_json_path, branch, jira_base_url, jira_token):
+def enrich_releases(input_json_path, branch, jira_base_url, jira_token, release_type="AOS"):
     """Read release JSON, search Jira for Epics, and return enriched rows."""
     with open(input_json_path) as f:
         data = json.load(f)
@@ -182,7 +227,7 @@ def enrich_releases(input_json_path, branch, jira_base_url, jira_token):
     # Support release_query.py format (has 'rows' key)
     if isinstance(data, dict) and "rows" in data:
         print("  Using pre-enriched release_query.py data.")
-        return _convert_release_query_rows(data, branch)
+        return _convert_release_query_rows(data, branch, release_type)
 
     results = []
     for release_key, release_obj in data.items():
@@ -212,8 +257,8 @@ def enrich_releases(input_json_path, branch, jira_base_url, jira_token):
         epic_key = find_aos_epic(jira_base_url, jira_token, aos_version)
         print(epic_key or "NOT FOUND")
 
-        changelog_url = build_endor_url(rhel_major, rhel_minor, kernel_version, release_version, "changelog.txt")
-        rpm_url = build_endor_url(rhel_major, rhel_minor, kernel_version, release_version, "rpm.txt")
+        changelog_url = build_endor_url(rhel_major, rhel_minor, kernel_version, release_version, "changelog.txt", branch, release_type)
+        rpm_url = build_endor_url(rhel_major, rhel_minor, kernel_version, release_version, "rpm.txt", branch, release_type)
 
         print(f"  Validating endor URLs for {release_version} ...", end=" ", flush=True)
         if check_url_exists(changelog_url):
@@ -373,11 +418,13 @@ def extract_existing_goldimage_versions(body_html):
 
 
 def _parse_merge_date(date_str):
-    """Parse 'dd-Mon-YYYY' to datetime for sorting. Returns epoch 0 on failure."""
+    """Parse 'dd-Mon-YYYY' to datetime for sorting. Blank/missing dates sort newest (top)."""
+    if not date_str or not date_str.strip():
+        return datetime.max
     try:
         return datetime.strptime(date_str.strip(), "%d-%b-%Y")
     except (ValueError, TypeError):
-        return datetime(1970, 1, 1)
+        return datetime.max
 
 
 def find_goldimage_table_bounds(body_html):
@@ -485,8 +532,6 @@ def _detect_release_type(input_json_path):
 
 
 def main():
-    load_env()
-
     parser = argparse.ArgumentParser(
         description="Confluence Tool — Update GoldImage release table"
     )
@@ -534,7 +579,7 @@ def main():
     print("=" * 50)
 
     print("\n[2/4] Enriching releases with Jira Epic tickets...")
-    releases = enrich_releases(args.input_json, args.branch, jira_base_url, jira_token)
+    releases = enrich_releases(args.input_json, args.branch, jira_base_url, jira_token, release_type)
 
     if not releases:
         raise DataError("No releases found in input JSON.")

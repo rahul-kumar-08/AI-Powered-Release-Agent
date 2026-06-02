@@ -53,11 +53,33 @@ DEFAULT_OWNER = "nutanix-core"
 DEFAULT_REPO = "aos-goldimage-os"
 DEFAULT_SG_URL = "https://sourcegraph.ntnxdpro.com"
 SG_GERRIT_REPO = "nugerrit.ntnxdpro.com/main"
-ENDOR_BASE = "http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master"
+ENDOR_GI_ROOT = "http://endor.dyn.nutanix.com/GoldImages"
+
+
+def get_endor_base(branch, comp_type="AOS"):
+    """Return the endor base URL for a given branch and component type.
+
+    AOS: master -> .../Centos_SVM/Master       ganges-X.Y -> .../Centos_SVM/STS/X.Y
+    PC:  master -> .../PC_GoldImages/pc/master  ganges-X.Y -> .../PC_GoldImages/pc/pc.X.Y
+    """
+    if comp_type == "PC":
+        if branch == "master":
+            return f"{ENDOR_GI_ROOT}/PC_GoldImages/pc/master"
+        m = re.match(r"ganges-(\d+\.\d+)", branch)
+        if m:
+            return f"{ENDOR_GI_ROOT}/PC_GoldImages/pc/pc.{m.group(1)}"
+        return f"{ENDOR_GI_ROOT}/PC_GoldImages/pc/master"
+    # AOS
+    if branch == "master":
+        return f"{ENDOR_GI_ROOT}/Centos_SVM/Master"
+    m = re.match(r"ganges-(\d+\.\d+)", branch)
+    if m:
+        return f"{ENDOR_GI_ROOT}/Centos_SVM/STS/{m.group(1)}"
+    return f"{ENDOR_GI_ROOT}/Centos_SVM/Master"
 
 RELEASE_RE = re.compile(r"^Release", re.IGNORECASE)
 REVERT_RE = re.compile(r"^Revert\b", re.IGNORECASE)
-PC_SPLIT_RE = re.compile(r"/PC:\s*", re.IGNORECASE)
+PC_SPLIT_RE = re.compile(r"/PC\s*:\s*", re.IGNORECASE)
 SECONDARY_SPLIT_RE = re.compile(r"/(?=main-|sts-)", re.IGNORECASE)
 EPIC_LINE_RE = re.compile(r"Epic'?s?\s*:\s*(.+)", re.IGNORECASE)
 VERSION_RE = re.compile(r"[Rr]elease\s*[Gg]old\s+[Ii]mage\s+([\w.\-]+)")
@@ -75,7 +97,15 @@ MAX_RETRIES = 3
 # Env helpers
 # ---------------------------------------------------------------------------
 
-def load_env(env_path="tools/.env"):
+_env_file_loaded = False
+
+
+def _load_env_file(env_path="tools/.env"):
+    """Load .env file once, only as fallback when runtime env lacks a variable."""
+    global _env_file_loaded
+    if _env_file_loaded:
+        return
+    _env_file_loaded = True
     if not os.path.isfile(env_path):
         return
     with open(env_path) as f:
@@ -87,7 +117,17 @@ def load_env(env_path="tools/.env"):
             os.environ.setdefault(key.strip(), val.strip().strip("\"'"))
 
 
+def load_env(env_path="tools/.env"):
+    """Compatibility wrapper — triggers lazy .env load."""
+    _load_env_file(env_path)
+
+
 def _env(name):
+    """Return env var: check runtime environment first, fall back to .env file."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    _load_env_file()
     val = os.environ.get(name, "").strip()
     if not val:
         raise ConfigError(f"{name} not set. Add to tools/.env or export it.")
@@ -318,24 +358,27 @@ def sg_batch_lookup(sg_token, sg_url, gerrit_ref, comp_type, count=50):
     except ToolError:
         return {}
 
-    result = {}
+    events = {}  # release_num → [(date, is_revert)]
     for c in commits:
         msg = c.get("message", "")
         if "release gold image" not in msg.lower():
             continue
         date = c.get("date", "")
-        if REVERT_RE.match(msg):
-            ver = VERSION_RE.search(msg)
-            if ver:
-                rel = _extract_release_num(ver.group(1))
-                if rel:
-                    result[rel] = (False, None)
-            continue
+        is_revert = bool(REVERT_RE.match(msg))
         ver = VERSION_RE.search(msg)
         if ver:
             rel = _extract_release_num(ver.group(1))
-            if rel and rel not in result:
-                result[rel] = (True, date)
+            if rel:
+                events.setdefault(rel, []).append((date, is_revert))
+
+    result = {}
+    for rel, evts in events.items():
+        evts.sort(key=lambda x: x[0], reverse=True)
+        latest_date, latest_is_revert = evts[0]
+        if latest_is_revert:
+            result[rel] = (False, None)
+        else:
+            result[rel] = (True, latest_date)
     return result
 
 # ---------------------------------------------------------------------------
@@ -345,12 +388,12 @@ def sg_batch_lookup(sg_token, sg_url, gerrit_ref, comp_type, count=50):
 def jira_epic_search(jira_url, jira_token, version_string):
     """Search Jira for an Epic matching the version.
 
-    Returns ``{"key": "ENG-123", "fix_versions": ["pc.7.5.1.8"]}``
+    Returns ``{"key": "ENG-123", "fix_versions": ["pc.7.5.1.8"], "status": "Closed"}``
     or ``None`` if no Epic found.
     """
     jql = f'issuetype = Epic AND summary ~ "{version_string}" ORDER BY created DESC'
     params = urllib.parse.urlencode({
-        "jql": jql, "fields": "key,summary,fixVersions", "maxResults": 3,
+        "jql": jql, "fields": "key,summary,fixVersions,status", "maxResults": 3,
     })
     url = f"{jira_url.rstrip('/')}/rest/api/2/search?{params}"
     headers = {
@@ -366,19 +409,21 @@ def jira_epic_search(jira_url, jira_token, version_string):
             fields = issue.get("fields", {})
             fv_list = fields.get("fixVersions") or []
             fix_versions = [v.get("name", "") for v in fv_list if v.get("name")]
-            return {"key": issue["key"], "fix_versions": fix_versions}
+            status_obj = fields.get("status") or {}
+            status_name = status_obj.get("name", "")
+            return {"key": issue["key"], "fix_versions": fix_versions, "status": status_name}
     except ToolError:
         pass
     return None
 
 
 def jira_get_epic(jira_url, jira_token, epic_key):
-    """Fetch a single EPIC by key and return its fix versions.
+    """Fetch a single EPIC by key and return its fix versions and status.
 
-    Returns ``{"key": "ENG-123", "fix_versions": ["pc.7.5.1.8"]}``
+    Returns ``{"key": "ENG-123", "fix_versions": ["pc.7.5.1.8"], "status": "Closed"}``
     or ``None`` on failure.
     """
-    params = urllib.parse.urlencode({"fields": "key,summary,fixVersions"})
+    params = urllib.parse.urlencode({"fields": "key,summary,fixVersions,status"})
     url = f"{jira_url.rstrip('/')}/rest/api/2/issue/{epic_key}?{params}"
     headers = {
         "Authorization": f"Bearer {jira_token}",
@@ -390,7 +435,9 @@ def jira_get_epic(jira_url, jira_token, epic_key):
         fields = data.get("fields", {})
         fv_list = fields.get("fixVersions") or []
         fix_versions = [v.get("name", "") for v in fv_list if v.get("name")]
-        return {"key": data["key"], "fix_versions": fix_versions}
+        status_obj = fields.get("status") or {}
+        status_name = status_obj.get("name", "")
+        return {"key": data["key"], "fix_versions": fix_versions, "status": status_name}
     except ToolError:
         pass
     return None
@@ -510,15 +557,21 @@ def build_goldimage_version(version, rhel_info):
     return f"{prefix}-rhel{major}.{minor}-{kernel}-{release}"
 
 
-def build_endor_urls(rhel_info):
+def build_endor_urls(rhel_info, branch="master", comp_type="AOS", version=None):
     """Build (changelog_url, rpm_url) from parsed RHEL info."""
     if not rhel_info:
         return "—", "—"
     major, minor, release, explicit_kernel = rhel_info
     kernel = explicit_kernel or KERNEL_MAP.get(str(major), "5.14.0")
-    tag = f"RHEL{major}{minor}"
-    folder = f"{tag}-SVM-{major}.{minor}-k{kernel}-r{release}.x86_64"
-    base = f"{ENDOR_BASE}/{folder}"
+    if comp_type == "PC" and branch != "master" and version:
+        folder = version
+    elif comp_type == "PC":
+        tag = f"RHEL{major}{minor}"
+        folder = f"{tag}-PC-{major}.{minor}-k{kernel}-r{release}"
+    else:
+        tag = f"RHEL{major}{minor}"
+        folder = f"{tag}-SVM-{major}.{minor}-k{kernel}-r{release}.x86_64"
+    base = f"{get_endor_base(branch, comp_type)}/{folder}"
     return f"[changelog]({base}/changelog.txt)", f"[rpm]({base}/rpm.txt)"
 
 
@@ -594,9 +647,9 @@ def format_date(iso_str):
 # ---------------------------------------------------------------------------
 
 def run_pipeline(branch, count, owner, repo, filter_type, with_sg, with_gh, no_cache):
-    load_env()
     gh_token = _env("GITHUB_TOKEN")
 
+    _load_env_file()
     sg_token = os.environ.get("SOURCEGRAPH_TOKEN", "").strip()
     sg_url = os.environ.get("SOURCEGRAPH_URL", DEFAULT_SG_URL).strip()
     jira_url = os.environ.get("JIRA_BASE_URL", "").strip()
@@ -667,7 +720,7 @@ def run_pipeline(branch, count, owner, repo, filter_type, with_sg, with_gh, no_c
             version = extract_version(heading)
             rhel_info = parse_rhel(version)
             gi_version = build_goldimage_version(version, rhel_info)
-            changelog, rpm = build_endor_urls(rhel_info)
+            changelog, rpm = build_endor_urls(rhel_info, branch, comp_type, version)
             tag = f" ({comp_type})" if (aos_heading and pc_heading) else ""
 
             row = {
@@ -685,6 +738,7 @@ def run_pipeline(branch, count, owner, repo, filter_type, with_sg, with_gh, no_c
                 "comp_type": comp_type,
                 "fix_versions": [],
                 "gerrit_ref": None,
+                "jira_status": None,
             }
             idx = len(rows)
             rows.append(row)
@@ -731,6 +785,7 @@ def run_pipeline(branch, count, owner, repo, filter_type, with_sg, with_gh, no_c
                         if result:
                             rows[idx]["main_ticket"] = result["key"]
                             rows[idx]["fix_versions"] = result.get("fix_versions", [])
+                            rows[idx]["jira_status"] = result.get("status", "")
                     except Exception as exc:
                         print(f"  Warning: Jira search failed: {exc}",
                               file=sys.stderr)
@@ -739,8 +794,17 @@ def run_pipeline(branch, count, owner, repo, filter_type, with_sg, with_gh, no_c
             info = epic_cache.get(ek)
             if info:
                 rows[idx]["fix_versions"] = info.get("fix_versions", [])
+                rows[idx]["jira_status"] = info.get("status", "")
     else:
         print(f"[3/5] No Jira lookups needed.", file=sys.stderr, flush=True)
+
+    # ---- Filter: only keep rows whose Jira main ticket is Closed ----
+    pre_filter_count = len(rows)
+    rows = [r for r in rows if (r.get("jira_status") or "").lower() == "closed"]
+    filtered_out = pre_filter_count - len(rows)
+    if filtered_out:
+        print(f"  Filtered out {filtered_out} row(s) with non-Closed Jira ticket",
+              file=sys.stderr, flush=True)
 
     # ---- Step 3b: Resolve Gerrit branches from fix versions ----
     if is_non_master:
@@ -860,6 +924,8 @@ def run_pipeline(branch, count, owner, repo, filter_type, with_sg, with_gh, no_c
               file=sys.stderr, flush=True)
 
     # Filter out rows where Sourcegraph confirms a revert (sg_merged == False).
+    # Rows with sg_merged == None (not yet confirmed) are kept — the GitHub
+    # PR is merged, so they should still be displayed.
     if sg_token:
         rows = [r for r in rows if r["sg_merged"] is not False]
 
@@ -878,7 +944,14 @@ def run_pipeline(branch, count, owner, repo, filter_type, with_sg, with_gh, no_c
             continue
         seen_versions.add(v)
         deduped.append(r)
-    rows = deduped[:count]
+    if filter_type == "all":
+        aos_rows = [r for r in deduped if r["comp_type"] == "AOS"][:count]
+        pc_rows = [r for r in deduped if r["comp_type"] == "PC"][:count]
+        rows = sorted(aos_rows + pc_rows,
+                      key=lambda r: r["sg_merge_date"] or r["gh_merge_date"] or "",
+                      reverse=True)
+    else:
+        rows = deduped[:count]
 
     elapsed = time.time() - t0
     print(f"[5/5] Done in {elapsed:.1f}s — {len(rows)} row(s)", file=sys.stderr, flush=True)
@@ -955,6 +1028,8 @@ def format_json(data):
             "sg_merge_date": r["sg_merge_date"],
             "gh_merge_date": r["gh_merge_date"],
             "pr_number": r["pr_number"],
+            "comp_type": r.get("comp_type", "AOS"),
+            "jira_status": r.get("jira_status", ""),
         }
         if r.get("gerrit_ref"):
             row_out["gerrit_ref"] = r["gerrit_ref"]

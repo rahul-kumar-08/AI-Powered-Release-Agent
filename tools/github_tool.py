@@ -51,7 +51,15 @@ RETRYABLE_HTTP_CODES = (429, 502, 503)
 MAX_RETRIES = 3
 
 
-def load_env(env_path="tools/.env"):
+_env_file_loaded = False
+
+
+def _load_env_file(env_path="tools/.env"):
+    """Load .env file once, only as fallback when runtime env lacks a variable."""
+    global _env_file_loaded
+    if _env_file_loaded:
+        return
+    _env_file_loaded = True
     if not os.path.isfile(env_path):
         return
     with open(env_path) as f:
@@ -62,6 +70,23 @@ def load_env(env_path="tools/.env"):
             key, _, val = line.partition("=")
             val = val.strip().strip("\"'")
             os.environ.setdefault(key.strip(), val)
+
+
+def load_env(env_path="tools/.env"):
+    """Compatibility wrapper — triggers lazy .env load."""
+    _load_env_file(env_path)
+
+
+def _require_env(name):
+    """Return env var: check runtime environment first, fall back to .env file."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    _load_env_file()
+    val = os.environ.get(name, "").strip()
+    if not val:
+        raise ConfigError(f"{name} is not set. Add it to tools/.env or export it.")
+    return val
 
 
 # ---------------------------------------------------------------------------
@@ -677,10 +702,7 @@ def print_ci_table(releases):
 # ---------------------------------------------------------------------------
 
 def main():
-    load_env()
-    token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise ConfigError("GITHUB_TOKEN not set. Set it in environment or tools/.env")
+    token = _require_env("GITHUB_TOKEN")
 
     parser = argparse.ArgumentParser(
         description="MCP GitHub PR Client for release extraction"

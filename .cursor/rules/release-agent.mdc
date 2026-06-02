@@ -167,6 +167,10 @@ messageTerms: ["Release Gold image"]
 python3 tools/sourcegraph_tool.py --pr-titles "<title1>;;<title2>" --format json
 ```
 
+### Step 5b -- Closed-ticket filter
+
+After Jira Epic lookup, **only keep releases whose Jira Main Ticket is in Closed status**. Releases with open, in-progress, or any non-Closed Jira ticket are excluded from the output table and Confluence updates. This applies to both fast-path (`release_query.py`) and MCP-based workflows.
+
 ### Step 6 -- Extract Main Ticket (Epic) per AOS/PC component
 
 For each release PR that passed Step 5, extract the Epic ticket for each component (AOS and/or PC):

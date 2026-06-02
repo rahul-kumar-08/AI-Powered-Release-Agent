@@ -186,6 +186,7 @@ Usage: `python3.14 agent_runner.py "Extract last 5 releases from master and upda
 - Versions containing `ganges-pc.` are classified as PC releases, not AOS.
 - Sourcegraph `commit_search` shows the original author; the committer on Gerrit is `svc.jenkins.autosub`.
 - Reverted release PRs are excluded using version-based timeline analysis.
+- Only releases whose Jira Main Ticket (Epic) is in **Closed** status are included in output tables and Confluence updates. Non-Closed tickets are filtered out.
 - Confluence tables are deduplicated by GoldImage version; rows are sorted newest-first.
 - Invalid changelog/RPM URLs are shown as "Data not found" (validated via HEAD requests).
 - `CONFLUENCE_PAGE_ID` is a parent page; child pages are auto-discovered/created per branch + type.

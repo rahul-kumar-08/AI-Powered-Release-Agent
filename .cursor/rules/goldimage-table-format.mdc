@@ -60,6 +60,10 @@ Use the `key` from the first result as the Main Ticket.
 
 If neither source yields an Epic, show `—` in the Main Ticket column.
 
+## Closed-ticket filter
+
+Only releases whose Jira Main Ticket (Epic) is in **Closed** status are included in the output table and Confluence updates. Releases with open, in-progress, or any non-Closed Jira ticket are filtered out and excluded from both the tabular response and Confluence page updates. This ensures only fully released data is presented.
+
 ## GoldImage Version construction
 
 From the release PR title `Release gold image main-master-rhel9.7-9.2.0`:

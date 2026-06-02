@@ -39,7 +39,29 @@ except ModuleNotFoundError:
         RateLimitError,
     )
 
-ENDOR_BASE_URL = "http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master"
+ENDOR_GI_ROOT = "http://endor.dyn.nutanix.com/GoldImages"
+
+
+def get_endor_base(branch="master", comp_type="AOS"):
+    """Return the endor base URL for a given branch and component type.
+
+    AOS: master -> .../Centos_SVM/Master       ganges-X.Y -> .../Centos_SVM/STS/X.Y
+    PC:  master -> .../PC_GoldImages/pc/master  ganges-X.Y -> .../PC_GoldImages/pc/pc.X.Y
+    """
+    if comp_type == "PC":
+        if branch == "master":
+            return f"{ENDOR_GI_ROOT}/PC_GoldImages/pc/master"
+        m = re.match(r"ganges-(\d+\.\d+)", branch)
+        if m:
+            return f"{ENDOR_GI_ROOT}/PC_GoldImages/pc/pc.{m.group(1)}"
+        return f"{ENDOR_GI_ROOT}/PC_GoldImages/pc/master"
+    # AOS
+    if branch == "master":
+        return f"{ENDOR_GI_ROOT}/Centos_SVM/Master"
+    m = re.match(r"ganges-(\d+\.\d+)", branch)
+    if m:
+        return f"{ENDOR_GI_ROOT}/Centos_SVM/STS/{m.group(1)}"
+    return f"{ENDOR_GI_ROOT}/Centos_SVM/Master"
 
 KERNEL_MAP = {
     "9": "5.14.0",
@@ -50,15 +72,15 @@ KERNEL_MAP = {
 # Environment helpers
 # ---------------------------------------------------------------------------
 
-def _require_env(name):
-    """Return env var value or raise ConfigError."""
-    val = os.environ.get(name, "").strip()
-    if not val:
-        raise ConfigError(f"{name} is not set. Add it to tools/.env or export it.")
-    return val
+_env_file_loaded = False
 
 
-def load_env(env_path="tools/.env"):
+def _load_env_file(env_path="tools/.env"):
+    """Load .env file once, only as fallback when runtime env lacks a variable."""
+    global _env_file_loaded
+    if _env_file_loaded:
+        return
+    _env_file_loaded = True
     if not os.path.isfile(env_path):
         return
     with open(env_path) as f:
@@ -69,6 +91,23 @@ def load_env(env_path="tools/.env"):
             key, _, val = line.partition("=")
             val = val.strip().strip("\"'")
             os.environ.setdefault(key.strip(), val)
+
+
+def load_env(env_path="tools/.env"):
+    """Compatibility wrapper — triggers lazy .env load."""
+    _load_env_file(env_path)
+
+
+def _require_env(name):
+    """Return env var: check runtime environment first, fall back to .env file."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    _load_env_file()
+    val = os.environ.get(name, "").strip()
+    if not val:
+        raise ConfigError(f"{name} is not set. Add it to tools/.env or export it.")
+    return val
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +211,16 @@ def build_goldimage_version(aos_version, kernel_version):
     return aos_version
 
 
-def build_endor_url(rhel_major, rhel_minor, kernel_version, release_version, filename):
-    rhel_tag = f"RHEL{rhel_major}{rhel_minor}"
-    folder = f"{rhel_tag}-SVM-{rhel_major}.{rhel_minor}-k{kernel_version}-r{release_version}.x86_64"
-    return f"{ENDOR_BASE_URL}/{folder}/{filename}"
+def build_endor_url(rhel_major, rhel_minor, kernel_version, release_version, filename, branch="master", comp_type="AOS", version=None):
+    if comp_type == "PC" and branch != "master" and version:
+        folder = version
+    elif comp_type == "PC":
+        rhel_tag = f"RHEL{rhel_major}{rhel_minor}"
+        folder = f"{rhel_tag}-PC-{rhel_major}.{rhel_minor}-k{kernel_version}-r{release_version}"
+    else:
+        rhel_tag = f"RHEL{rhel_major}{rhel_minor}"
+        folder = f"{rhel_tag}-SVM-{rhel_major}.{rhel_minor}-k{kernel_version}-r{release_version}.x86_64"
+    return f"{get_endor_base(branch, comp_type)}/{folder}/{filename}"
 
 
 def format_merge_date(iso_date):
@@ -203,8 +248,6 @@ def check_url_exists(url):
 # ---------------------------------------------------------------------------
 
 def main():
-    load_env()
-
     parser = argparse.ArgumentParser(description="Jira Tool — AOS Epic search")
     parser.add_argument("--input-json", required=True, help="Path to release extractor JSON")
     parser.add_argument("--branch", required=True, help="Branch name (for Notes column)")

@@ -48,14 +48,22 @@ except ModuleNotFoundError:
 DEFAULT_REPO = "nugerrit.ntnxdpro.com/main"
 DEFAULT_SG_URL = "https://sourcegraph.ntnxdpro.com"
 REVERT_RE = re.compile(r"^Revert\b", re.IGNORECASE)
-PC_SPLIT_RE = re.compile(r"/PC:\s*", re.IGNORECASE)
+PC_SPLIT_RE = re.compile(r"/PC\s*:\s*", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
 # Environment
 # ---------------------------------------------------------------------------
 
-def load_env(env_path="tools/.env"):
+_env_file_loaded = False
+
+
+def _load_env_file(env_path="tools/.env"):
+    """Load .env file once, only as fallback when runtime env lacks a variable."""
+    global _env_file_loaded
+    if _env_file_loaded:
+        return
+    _env_file_loaded = True
     if not os.path.isfile(env_path):
         return
     with open(env_path) as f:
@@ -68,7 +76,17 @@ def load_env(env_path="tools/.env"):
             os.environ.setdefault(key.strip(), val)
 
 
+def load_env(env_path="tools/.env"):
+    """Compatibility wrapper — triggers lazy .env load."""
+    _load_env_file(env_path)
+
+
 def _require_env(name):
+    """Return env var: check runtime environment first, fall back to .env file."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    _load_env_file()
     val = os.environ.get(name, "").strip()
     if not val:
         raise ConfigError(f"{name} is not set. Add it to tools/.env or export it.")
@@ -315,8 +333,6 @@ def print_table(results):
 # ---------------------------------------------------------------------------
 
 def main():
-    load_env()
-
     parser = argparse.ArgumentParser(
         description="Sourcegraph Tool — Validate release PR merge status"
     )

@@ -25,27 +25,29 @@ This project automates the extraction of GitHub release PR data, validates merge
 AI-Powered-Release-Agent/
 ├── AGENTS.md
 ├── README.md
+├── release_query.py                 # Main entry point: full pipeline (run from root)
 ├── agent_runner.py                  # Mission decomposition + tool dispatch (cursor-sdk)
 ├── .cursor/rules/
 │   ├── mcp.json                     # MCP server config (GitHub, Sourcegraph, Atlassian, etc.)
 │   ├── confluence-release-update-workflow.mdc  # Always-apply workflow rule
 │   ├── release-agent.mdc            # Always-apply agent identity + MCP workflow
 │   └── goldimage-table-format.mdc   # Always-apply output format rule
-└── tools/
+└── tools/                           # MCP client modules (importable package)
+    ├── __init__.py
     ├── .env                         # Secrets (DO NOT commit)
-    ├── exceptions.py                # Typed exception hierarchy (ToolError, AuthError, etc.)
-    ├── release_query.py             # Fast-path: concurrent GitHub+SG+Jira pipeline (preferred)
-    ├── github_tool.py               # GitHub release extraction via REST API
-    ├── jira_tool.py                 # Jira Epic ticket search
-    ├── confluence_tool.py           # Confluence table updater with auto page routing
-    └── sourcegraph_tool.py          # Sourcegraph/Gerrit release merge validation (AOS/PC split)
+    ├── mcp_client.py                # Shared MCP client (fastmcp wrapper)
+    ├── mcp_github_client.py         # GitHub MCP + REST API (commit details, CI status)
+    ├── mcp_sourcegraph_client.py    # Sourcegraph MCP (commit search)
+    ├── mcp_confluence_client.py     # Confluence MCP (table upload, page routing)
+    ├── mcp_ticket_validator.py      # Ticket validation via Sourcegraph
+    └── release_query.py             # Backward-compatible wrapper → root release_query.py
 ```
 
 ## Key Components
 
-### `tools/release_query.py`
+### `release_query.py` (project root)
 
-**Fast-path unified pipeline.** Runs GitHub + Sourcegraph/Gerrit + Jira lookups concurrently using `ThreadPoolExecutor`. ~5x faster than sequential MCP calls. Includes a file-based cache (5 min TTL) to skip API calls on repeated queries.
+**Main entry point — full pipeline in a single run.** Runs GitHub + Sourcegraph/Gerrit + Jira lookups concurrently. All public functions are independently callable by MCP tools (`from release_query import fetch_gerrit_releases, parse_releases`).
 
 Key capabilities:
 - **Revert detection**: Builds a per-version timeline of release/revert events; excludes versions whose latest event is a revert.
@@ -65,77 +67,39 @@ Key flags:
 
 Examples:
 ```bash
-python3 tools/release_query.py --branch master --count 5
-python3 tools/release_query.py --branch ganges-7.5 --count 10 --filter pc --with-sg-date --with-github-date
-python3 tools/release_query.py --branch master --count 10 --format json --output /tmp/out.json
+python3 release_query.py --branch master --count 5
+python3 release_query.py --branch ganges-7.5 --count 10 --filter pc --with-sg-date --with-github-date
+python3 release_query.py --branch master --count 10 --format json --output /tmp/out.json
 ```
 
-### `tools/github_tool.py`
+### `tools/mcp_client.py`
 
-Python 3 CLI tool that extracts release PRs, associated PRs, and CI status from GitHub using the REST API. Supports retry with exponential backoff.
+Shared MCP client — thin synchronous wrapper around `fastmcp` for use by all tool modules. Provides `call_tool()`, `list_tools()`, `_get_env()`, and `load_mcp_config()`. Reads `.cursor/rules/mcp.json` for MCP server config and `tools/.env` for secrets.
 
-Key flags:
-- `--repo owner/name` — target repository
-- `--branch` — branch to scan
-- `--count N` — latest N releases
-- `--ci-status` — include postmerge CircleCI status
-- `--output-json` — save structured JSON output
-- `--mode prs|commits|both` — data source
-- `--include-comments` — parse PR comments for tickets/commands
+### `tools/mcp_github_client.py`
 
-### `tools/sourcegraph_tool.py`
+GitHub MCP client + REST API. Fetches commit details, PR information, and CircleCI postmerge status. The `fetch_postmerge_ci()` function is used by `release_query.py` for CI status enrichment.
 
-Self-contained HTTP client for Sourcegraph. Validates release CR merge status by querying the **Gerrit repo** (`nugerrit.ntnxdpro.com/main`) via Sourcegraph's stream API. This is the source of truth for CR merges — CRs are auto-submitted by `svc.jenkins.autosub` on Gerrit before syncing to GitHub. Splits combined AOS/PC release titles (separated by `/PC:`) and validates each component independently. Detects reverted releases. Raises typed exceptions.
+Subcommands: `commit`, `ci`, `pr`, `list-commits`, `list-tools`
 
-Key flags:
-- `--input-json <path>` — path to github_tool.py release JSON
-- `--pr-titles` — semicolon-separated PR titles to validate directly
-- `--output-json` — save validated output to JSON
-- `--format table|json` — output format
+### `tools/mcp_sourcegraph_client.py`
 
-Required env var: `SOURCEGRAPH_TOKEN`
+Sourcegraph MCP client. Searches commits via the `commit_search` MCP tool on the Sourcegraph gateway. Used for Gerrit/GitHub commit history lookups.
 
-### `tools/jira_tool.py`
+### `tools/mcp_confluence_client.py`
 
-Self-contained HTTP client for Jira Epic search. Reads release JSON, extracts AOS versions, and queries Jira REST API. Raises typed exceptions.
+Confluence MCP client with **automatic page routing**. Uploads release tables via the Atlassian MCP server. Features auto child page discovery/creation, deduplication, sorted table rebuild, and Jira Issue macros in storage format.
 
 Key flags:
-- `--input-json <path>` — path to release extractor JSON
-- `--branch` — branch name for Notes column
-- `--output-json` — save enriched JSON output
-- `--format table|json` — output format
-
-### `tools/confluence_tool.py`
-
-Self-contained HTTP client for Confluence table updates with **automatic page routing**. Uses `CONFLUENCE_PAGE_ID` as the parent page and automatically discovers or creates child pages for each branch + release type (AOS/PC) combination.
-
-Key capabilities:
-- **Auto page routing**: Lists child pages under the parent, matches by branch name + type in title, creates new child pages if needed (e.g. "PC Release ganges-7.3").
-- **URL validation**: Validates changelog and RPM URLs via parallel HEAD checks; invalid links show "Data not found".
-- **Sorted table rebuild**: When adding rows, rebuilds the entire table sorted by merge date (newest first). Existing rows are preserved and re-sorted alongside new ones.
-- **Force rebuild**: `--force-rebuild` rebuilds the table from JSON data even when no new rows to add — useful for fixing ordering or URL issues on existing pages.
-
-Key flags:
-- `--input-json <path>` — path to extractor JSON output
+- `--input-json <path>` — path to release JSON
 - `--branch` — branch name
-- `--type AOS|PC` — release type (auto-detected from JSON if omitted)
-- `--max-releases N` — max releases to process (0 = all)
+- `--type AOS|PC` — release type (auto-detected if omitted)
+- `--dry-run` — preview without updating
 - `--force-rebuild` — rebuild entire table even if no new rows
-- `--dry-run` — preview changes without updating
 
-### `tools/exceptions.py`
+### `tools/mcp_ticket_validator.py`
 
-Typed exception hierarchy used by all `*_tool.py` files. The orchestrator (`agent_runner.py`) inspects the exception type in subprocess stderr to decide whether to retry.
-
-Exception classes:
-- `ToolError` — base (carries `retryable` flag)
-- `AuthError` — 401/403, never retryable
-- `ConfigError` — missing env var, never retryable
-- `RateLimitError` — 429, always retryable
-- `HttpError` — other HTTP errors, retryable for 502/503/504
-- `NetworkError` — DNS/timeout, always retryable
-- `NotFoundError` — 404, never retryable
-- `DataError` — parse/validation, never retryable
+Validates Jira EPIC/ticket IDs against release commits via Sourcegraph MCP. For each release, extracts all referenced ticket IDs from commit messages and validates each by searching Sourcegraph for commits mentioning that ticket.
 
 ### `agent_runner.py`
 
@@ -157,26 +121,26 @@ Usage: `python3.14 agent_runner.py "Extract last 5 releases from master and upda
 
 ## Workflow
 
-### Primary: fast-path via `release_query.py`
+### Primary: fast-path via `release_query.py` (project root)
 
 1. User asks for release data from one or more branches.
-2. Agent runs `python3 tools/release_query.py` with appropriate flags.
+2. Agent runs `python3 release_query.py` with appropriate flags.
 3. Script concurrently fetches GitHub releases, validates via Sourcegraph/Gerrit, and looks up Jira Epics.
 4. Agent displays the table output directly.
-5. If user requests Confluence update, agent runs `release_query.py --format json --output <path>`, then `confluence_tool.py --input-json <path> --branch <branch>`.
+5. If user requests Confluence update, agent runs `python3 release_query.py --format json --output <path>`, then `python3 -m tools.mcp_confluence_client --input-json <path> --branch <branch>`.
 
 ### Fallback 1: MCP-based extraction
 
 1. If `release_query.py` fails, agent uses **GitHub MCP tools** (`search_issues`, `get_pull_request`, `list_pull_requests`) to fetch release PR metadata.
 2. Agent validates CR merge status via **Sourcegraph MCP tools** (`commit_search`) against the **Gerrit repo** (`nugerrit.ntnxdpro.com/main`). A GitHub PR merge does NOT mean the CR is merged.
 3. Agent presents results in tabular format.
-4. If user requests Confluence update, agent exports JSON and runs `confluence_tool.py`.
+4. If user requests Confluence update, agent exports JSON and runs `mcp_confluence_client.py`.
 
 ### Fallback 2: direct tool invocation
 
-1. If MCP tools are also unavailable, agent runs individual tools (`github_tool.py`, `sourcegraph_tool.py`, `jira_tool.py`) directly.
+1. If MCP tools are also unavailable, agent runs individual MCP client modules (`mcp_github_client.py`, `mcp_sourcegraph_client.py`) directly.
 2. Agent presents results in tabular format.
-3. For Confluence update, agent pipes output through `confluence_tool.py`.
+3. For Confluence update, agent pipes output through `mcp_confluence_client.py`.
 
 ## Conventions
 
@@ -194,10 +158,10 @@ Usage: `python3.14 agent_runner.py "Extract last 5 releases from master and upda
 
 ## Agent Guidelines
 
-- Prefer **`tools/release_query.py`** (fast-path) for release extraction; fall back to MCP tools, then direct tool invocation.
+- Prefer **`release_query.py`** at project root (fast-path) for release extraction; fall back to MCP tools, then direct tool invocation.
 - Always source `tools/.env` before running scripts that need tokens.
 - Never commit or expose secrets from `.env`.
-- For Confluence updates, use `confluence_tool.py` directly — it handles page routing automatically.
+- For Confluence updates, use `mcp_confluence_client.py` directly — it handles page routing automatically.
 - Use `--force-rebuild` when existing pages need re-sorting or URL re-validation.
 - For multi-branch queries via MCP, repeat the workflow per branch.
 - When updating Confluence, report exact counts of added/skipped entries.

@@ -6,7 +6,7 @@ When the user asks for releases/release data from any branch, present the result
 
 | Column | Description |
 |--------|-------------|
-| GoldImage Version | Constructed as `main-{branch}-rhel{X.Y}-{kernel}-{release}` (e.g. `main-master-rhel9.7-5.14.0-9.2.0`). Append `(AOS)` or `(PC)` tag when the release PR contains both AOS and PC components. |
+| GoldImage Version | For rhel9 Constructed as `main-{branch}-rhel{X.Y}-{release}` where as `rhel8 main-{branch}-rhel{X.Y}-{kernel}-{release}` but  (e.g. `main-master-rhel9.7-9.2.0`). Append `(AOS)` or `(PC)` tag when the release PR contains both AOS and PC components. |
 | Main Ticket | **One Epic ticket per row.** Extracted from the release PR body or Jira (see extraction rules below). |
 | Change Log | `[changelog](<endor_url>/changelog.txt)` — link to endor changelog |
 | RPM List | `[rpm](<endor_url>/rpm.txt)` — link to endor RPM list |
@@ -64,27 +64,17 @@ If neither source yields an Epic, show `—` in the Main Ticket column.
 
 Only releases whose Jira Main Ticket (Epic) is in **Closed** status are included in the output table and Confluence updates. Releases with open, in-progress, or any non-Closed Jira ticket are filtered out and excluded from both the tabular response and Confluence page updates. This ensures only fully released data is presented.
 
-## GoldImage Version construction
-
-From the release PR title `Release gold image main-master-rhel9.7-9.2.0`:
-1. Extract: `rhel_part = main-master-rhel9.7`, `release = 9.2.0`
-2. Determine kernel version:
-   - rhel9.x → `5.14.0`
-   - rhel8.x → extract from title (e.g. `5.10.245`)
-3. Result: `main-master-rhel9.7-5.14.0-9.2.0`
-
-For combined releases, construct separate versions for AOS and PC parts.
 
 ## Endor URL construction
 
 Base: `http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master/`
 
-Directory pattern: `RHEL{major}{minor}-SVM-{major}.{minor}-k{kernel}-r{release}.x86_64/`
+Directory pattern: `main-{branch}-rhel9.{version}-{major}.{minor}.{patch}/`
 
-Example for `main-master-rhel9.7-5.14.0-9.0.0`:
-- `RHEL97-SVM-9.7-k5.14.0-r9.0.0.x86_64/`
-- changelog: `http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master/RHEL97-SVM-9.7-k5.14.0-r9.0.0.x86_64/changelog.txt`
-- rpm: `http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master/RHEL97-SVM-9.7-k5.14.0-r9.0.0.x86_64/rpm.txt`
+Example for `main-master-rhel9.7-9.0.0`:
+- `main-master-rhel9.7-9.0.0/`
+- changelog: `http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master/main-master-rhel9.7-9.0.0/changelog.txt`
+- rpm: `http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master/main-master-rhel9.7-9.0.0/rpm.txt`
 
 Construct Endor URLs separately for AOS and PC rows using their respective version numbers.
 

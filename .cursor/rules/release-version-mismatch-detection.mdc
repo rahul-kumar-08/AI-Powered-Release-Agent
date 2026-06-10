@@ -1,0 +1,121 @@
+---
+description: Use commit heading as source of truth for GoldImage Version and EPIC lookup; detect variables.sh mismatches
+alwaysApply: false
+---
+
+# Release Version & EPIC Resolution from Commit Heading
+
+The **commit heading** (release PR title) is the source of truth for the GoldImage Version, especially on non-master branches. The heading version must drive both the GoldImage Version column AND the Jira EPIC lookup.
+
+## Why this matters
+
+The `mcp_release_formatter.py` reads `VERSION_GI` from `services/variables.sh`, which on non-master branches (e.g. `ganges-7.6`) may still contain `main-master-*` instead of the correct `main-ganges-7.6-*`. Using the wrong version cascades into:
+1. **Wrong GoldImage Version** in the table (shows `main-master-*` instead of `main-ganges-7.6-*`)
+2. **Wrong Main Ticket** — the EPIC lookup uses the variables.sh version to search Jira, finding the master EPIC instead of the branch-specific EPIC
+
+## Correct resolution flow
+
+```
+1. Extract goldimage version from COMMIT HEADING (source of truth)
+2. Use HEADING VERSION to search Jira for the EPIC
+   → jql: issuetype = Epic AND summary ~ "<heading_version>"
+   → This finds the branch-specific EPIC (e.g. ganges-7.6 EPIC, not master)
+3. Validate: if Jira EPIC summary contains the same version as heading → CONFIRMED
+4. Use heading version for GoldImage Version column
+5. Use the branch-specific EPIC for Main Ticket column
+6. Read variables.sh → compare against heading → report mismatch if different
+```
+
+### Step 1 — Extract heading version
+
+Strip `Release gold image ` prefix and `(#NNNN)` suffix from commit title. For combined releases, split on `/PC:` or `/PC :` to get AOS and PC separately.
+
+| Component | How to extract |
+|-----------|---------------|
+| AOS | Part before `/PC:` (or full title if AOS-only), strip prefix |
+| PC | Part after `/PC:`, strip prefix |
+
+### Step 2 — EPIC lookup using heading version
+
+Search Jira using the **heading version** (not variables.sh version):
+
+```
+issuetype = Epic AND summary ~ "<heading_version>" ORDER BY created DESC
+```
+
+Example: heading says `main-ganges-7.6-rhel9.7-8.0.0` → search for `summary ~ "main-ganges-7.6-rhel9.7-8.0.0"`. This finds the ganges-7.6 EPIC, not the master one.
+
+If no EPIC found with the heading version, fall back to searching with the variables.sh version (in case the heading was overridden and Jira uses the original version).
+
+### Step 3 — Validate heading against Jira
+
+Extract the goldimage version from the EPIC summary (strip `Release Gold image ` / `PC : Release gold image ` / `PC:Release gold image ` prefix).
+
+- If Jira version == heading version → **confirmed**, use heading version
+- If Jira version != heading version → check if Jira matches variables.sh instead, use whichever 2-of-3 agree
+
+### Step 4 — GoldImage Version column
+
+Always display the **confirmed version** (heading when Jira agrees, or Jira+file version when those agree).
+
+### Step 5 — Main Ticket column
+
+Use the EPIC found in Step 2 (searched by heading version). This ensures branch-specific EPICs are used.
+
+### Step 6 — variables.sh mismatch check
+
+Read `services/variables.sh` at the commit SHA. Compare against the confirmed version. Report mismatches in a summary after the table.
+
+## Mismatch summary format
+
+Append after the table only when mismatches exist:
+
+```
+**Version Mismatch Summary** (N releases affected)
+
+| Release | EPIC | Heading Version | Jira EPIC Version | Expected in variables.sh | Actual in variables.sh | Verdict |
+|---|---|---|---|---|---|---|
+| <ver> | <ticket> | <heading> | <jira> | <expected> | <actual> | <verdict> |
+```
+
+Verdict values:
+- `Heading + Jira agree → variables.sh needs fix` — confirmed correct version, variables.sh is wrong
+- `Jira + file agree → heading overridden` — heading was changed, Jira+file have the real version
+- `All differ → verify manually`
+
+## When to run
+
+- During **every release extraction** (fast-path, MCP workflow, or `mcp_release_formatter.py`)
+- Before displaying the table
+- Before pushing to Confluence
+
+## Confluence gating
+
+- Heading + Jira agree → use heading version for Confluence
+- Heading and Jira disagree → ask user before pushing
+
+## Example
+
+### ganges-7.6 branch: heading has correct branch-specific version
+
+```
+Commit heading:  Release gold image main-ganges-7.6-rhel9.7-7.0.0
+EPIC search:     summary ~ "main-ganges-7.6-rhel9.7-7.0.0" → finds ENG-925707
+Jira ENG-925707: "PC:Release gold image main-ganges-7.6-rhel9.7-7.0.0"  ← matches heading
+variables.sh:    VERSION_GI="main-master-rhel9.7-7.0.0"                 ← MISMATCH
+
+Table row:
+  GoldImage Version = main-ganges-7.6-rhel9.7-7.0.0  (from heading, confirmed by Jira)
+  Main Ticket       = ENG-925707                       (branch-specific EPIC)
+
+Mismatch summary:
+  Expected in variables.sh: main-ganges-7.6-rhel9.7-7.0.0
+  Actual in variables.sh:   main-master-rhel9.7-7.0.0
+  Verdict: Heading + Jira agree → variables.sh needs fix
+```
+
+## What NOT to flag
+
+- Heading matching variables.sh with kernel substring difference (e.g. `rhel9.7-9.2.0` vs `rhel9.7-5.14.0-9.2.0`) — normal
+- Reverted releases — already excluded by revert detection
+- Releases where all three sources are consistent

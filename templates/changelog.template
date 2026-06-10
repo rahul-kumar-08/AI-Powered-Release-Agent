@@ -1,0 +1,28 @@
+New GI: {Current_Gold_Image_Version}
+Old GI: {Previous_Gold_Image_Version}
+
+- Main GI ticket:
+- https://jira.nutanix.com/browse/{MAIN_JIRA_EPIC}
+
+- GI Release PR : 
+ - {RELEASE_PR_LINK}
+
+- PR's included in GI:
+{% for PR in associated_prs %}
+- {{ PR }}
+{% endfor %}
+
+- Gerrit CR:
+- {GERRIT_CR_LINK}
+
+This Gold image includes the following tickets:
+Tickets Resolved :
+{% for jira_id in JIRA_TICKETS_FOR_PR %}
+    {% if "Release" not in jira_id %}
+{{ jira_id }}
+    {% endif %}
+{% else %}
+
+-The following rpms have been updated/deleted:
+Old RPMs                                                      | New RPMs
+------------------------------------------------------------------------------------------------------------------------

@@ -3,18 +3,27 @@
 Agent Runner — receives a mission string, calls Cursor SDK to
 decompose it into steps, then dispatches each step to the right tool.
 
+The primary tool is ``release_query.py`` which runs the full pipeline:
+  - Extract releases from Sourcegraph/GitHub
+  - Fetch CircleCI postmerge status
+  - Download RPM artifacts from Artifactory
+  - Generate changelogs from template
+  - Upload changelog/rpm files to SFTP
+  - Update Confluence release tables
+
 Uses the cursor-sdk Python package (pip install cursor-sdk).
-Requires Python 3.10+.  Run with: python3.14 agent_runner.py ...
+Requires Python 3.10+.
 
 Usage:
-    python3.14 agent_runner.py "Extract last 5 releases from master"
-    python3.14 agent_runner.py "Extract releases from master, find Jira epics, update Confluence"
-    python3.14 agent_runner.py --dry-run "Full pipeline for ganges-7.5 last 3 releases"
+    python3 agent_runner.py "Extract last 5 releases from master"
+    python3 agent_runner.py "Get releases from ganges-7.5 and update confluence"
+    python3 agent_runner.py --dry-run "Full pipeline for ganges-7.5 last 3 releases"
 
 Requires:
     CURSOR_API_KEY  — Cursor Dashboard -> Integrations
-    GITHUB_TOKEN    — for GitHub tool dispatch
-    JIRA_* / CONFLUENCE_* — for Jira/Confluence dispatch (in tools/.env)
+    GITHUB_TOKEN, SOURCEGRAPH_TOKEN — for release extraction (in tools/.env)
+    JIRA_*, CONFLUENCE_* — for Jira/Confluence (in tools/.env)
+    SFTP_*, ARTIFACTORY_* — for file upload/download (in tools/.env)
 """
 
 import argparse
@@ -22,6 +31,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 MAX_TOOL_RETRIES = 3
@@ -32,60 +42,61 @@ decompose the user's mission into an ordered list of tool steps.
 
 Available tools and their parameters:
 
-1. github_releases — Extract release PRs from GitHub.
-   params: branch (string, default "master"), count (int, default 1),
-           repo (string, default "nutanix-core/aos-goldimage-os"),
-           ci_status (bool, default false), output_json (string path)
+1. release_query — Run the full release pipeline: extract releases from
+   Sourcegraph/GitHub, fetch CircleCI status, download RPMs from Artifactory,
+   generate changelogs, upload files to SFTP, and update Confluence.
+   All stages run by default; use no_* flags to skip individual stages.
+   params: branch (string, default "master"), count (int, default 5),
+           filter (string: "all"|"aos"|"pc", default "all"),
+           format (string: "table"|"json"|"markdown", default "table"),
+           output (string path, optional — save JSON to file),
+           with_github_date (bool, default false — add PR merge date column),
+           with_sg_date (bool, default false — add CR merge date column),
+           no_ci_status (bool, default false — skip CircleCI fetch),
+           no_download_rpm (bool, default false — skip Artifactory RPM download),
+           no_generate_changelog (bool, default false — skip changelog generation),
+           no_upload_sftp (bool, default false — skip SFTP upload),
+           no_upload_confluence (bool, default false — skip Confluence upload),
+           validate_urls (bool, default false — HEAD-check URLs),
+           rpm_dir (string, optional — directory for downloaded RPM files)
 
-2. jira_epic_search — Enrich releases with Jira Epic tickets.
-   params: input_json (string path, required), branch (string, required)
-
-3. confluence_update — Update Confluence page with release table.
-   params: input_json (string path, required), branch (string, required),
+2. confluence_update — Re-upload or force-rebuild an existing Confluence page
+   from a pre-generated JSON file. Only needed when release_query's built-in
+   Confluence upload was skipped (no_upload_confluence) or when you need to
+   force-rebuild a page.
+   params: input_json (string path, required — from release_query JSON output),
+           branch (string, required),
            type (string "AOS"|"PC", optional — auto-detected from JSON if omitted),
-           force_rebuild (bool, default false — rebuild table even if no new rows),
+           force_rebuild (bool, default false),
            dry_run (bool, default false)
-
-4. ci_status — Fetch postmerge CircleCI status for releases.
-   params: branch (string, default "master"), count (int, default 1),
-           commit_sha (string, optional — for a single commit)
-
-5. shell_pipeline — Run the full end-to-end pipeline script.
-   params: action (string: "extract"|"update"|"pipeline"),
-           branches (string, comma-separated), count (int, default 1),
-           dry_run (bool, default false)
-
-6. sourcegraph_validate — Validate release PR merge status via Sourcegraph.
-   params: input_json (string path — from github_releases output),
-           pr_titles (string — semicolon-separated titles, alternative to input_json),
-           output_json (string path, optional), format (string: "json"|"table")
 
 Rules:
 - Return ONLY a JSON array. No markdown, no explanation, no extra text.
 - Each element: {"step": N, "tool": "<name>", "params": {...}}
-- Infer defaults: branch="master", count=1 when not specified.
-- When a step produces JSON output, set output_json="/tmp/releases_<branch>_<count>.json"
-  and pass that path as input_json to downstream steps.
-- If the user says "pipeline" or "full pipeline", use shell_pipeline with action="pipeline".
-- If the user says "update confluence", include confluence_update step.
-- If the user mentions "jira" or "epic" or "tickets", include jira_epic_search.
-- If the user mentions "ci" or "circleci" or "postmerge", include ci_status.
-- If the user mentions "validate", "sourcegraph", or "merge status", include sourcegraph_validate
-  after github_releases, passing the output_json as input_json.
+- Infer defaults: branch="master", count=5 when not specified.
+- A single release_query step handles the full pipeline including Confluence.
+- Do NOT add a separate confluence_update step unless the user explicitly asks
+  to force-rebuild or re-upload from existing JSON.
+- If the user only wants to view releases without side effects, set
+  no_upload_sftp=true and no_upload_confluence=true.
 
 Examples:
 
 Mission: "Extract last 5 releases from master"
 Output:
-[{"step":1,"tool":"github_releases","params":{"branch":"master","count":5,"output_json":"/tmp/releases_master_5.json"}}]
+[{"step":1,"tool":"release_query","params":{"branch":"master","count":5,"no_upload_sftp":true,"no_upload_confluence":true}}]
 
-Mission: "Get releases from ganges-7.5, find jira epics, update confluence"
+Mission: "Get releases from ganges-7.5 and update confluence"
 Output:
-[{"step":1,"tool":"github_releases","params":{"branch":"ganges-7.5","count":1,"output_json":"/tmp/releases_ganges-7.5_1.json"}},{"step":2,"tool":"jira_epic_search","params":{"input_json":"/tmp/releases_ganges-7.5_1.json","branch":"ganges-7.5"}},{"step":3,"tool":"confluence_update","params":{"input_json":"/tmp/releases_ganges-7.5_1.json","branch":"ganges-7.5"}}]
+[{"step":1,"tool":"release_query","params":{"branch":"ganges-7.5","count":5}}]
 
-Mission: "Full pipeline for master last 3"
+Mission: "Last 3 PC releases from master"
 Output:
-[{"step":1,"tool":"shell_pipeline","params":{"action":"pipeline","branches":"master","count":3}}]
+[{"step":1,"tool":"release_query","params":{"branch":"master","count":3,"filter":"pc","no_upload_sftp":true,"no_upload_confluence":true}}]
+
+Mission: "Force rebuild confluence page for ganges-7.6 PC releases"
+Output:
+[{"step":1,"tool":"release_query","params":{"branch":"ganges-7.6","count":5,"filter":"pc","format":"json","output":"/tmp/releases_ganges-7.6_5.json","no_upload_confluence":true}},{"step":2,"tool":"confluence_update","params":{"input_json":"/tmp/releases_ganges-7.6_5.json","branch":"ganges-7.6","type":"PC","force_rebuild":true}}]
 
 Now decompose this mission:
 """
@@ -185,112 +196,78 @@ def parse_steps(raw_text):
 # Tool dispatch functions
 # ---------------------------------------------------------------------------
 
-def run_github_releases(params):
-    """Extract releases via github_tool.py."""
+def run_release_query(params):
+    """Run the full release pipeline via release_query.py."""
     cmd = [
-        sys.executable, "tools/github_tool.py",
+        sys.executable, "release_query.py",
         "--branch", params.get("branch", "master"),
-        "--count", str(params.get("count", 1)),
+        "--count", str(params.get("count", 5)),
+        "--filter", params.get("filter", "all"),
+        "--format", params.get("format", "table"),
     ]
-    repo = params.get("repo")
-    if repo:
-        cmd.extend(["--repo", repo])
-    if params.get("ci_status"):
-        cmd.append("--ci-status")
-    output_json = params.get("output_json")
-    if output_json:
-        cmd.extend(["--output-json", output_json])
-    return run_subprocess(cmd)
-
-
-def run_jira_epic_search(params):
-    """Search Jira for Epic tickets via jira_tool.py."""
-    input_json = params.get("input_json")
-    branch = params.get("branch", "master")
-    if not input_json:
-        return {"ok": False, "error": "input_json is required"}
-    cmd = [
-        sys.executable, "tools/jira_tool.py",
-        "--input-json", input_json,
-        "--branch", branch,
-    ]
-    return run_subprocess(cmd)
+    output = params.get("output")
+    if output:
+        cmd.extend(["--output", output])
+    rpm_dir = params.get("rpm_dir")
+    if rpm_dir:
+        cmd.extend(["--rpm-dir", rpm_dir])
+    if params.get("with_github_date"):
+        cmd.append("--with-github-date")
+    if params.get("with_sg_date"):
+        cmd.append("--with-sg-date")
+    if params.get("no_ci_status"):
+        cmd.append("--no-ci-status")
+    if params.get("no_download_rpm"):
+        cmd.append("--no-download-rpm")
+    if params.get("no_generate_changelog"):
+        cmd.append("--no-generate-changelog")
+    if params.get("no_upload_sftp"):
+        cmd.append("--no-upload-sftp")
+    if params.get("no_upload_confluence"):
+        cmd.append("--no-upload-confluence")
+    if params.get("validate_urls"):
+        cmd.append("--validate-urls")
+    return run_subprocess(cmd, stream=True)
 
 
 def run_confluence_update(params):
-    """Update Confluence via confluence_tool.py."""
+    """Re-upload or force-rebuild a Confluence page from pre-generated JSON."""
     input_json = params.get("input_json")
     branch = params.get("branch", "master")
     if not input_json:
         return {"ok": False, "error": "input_json is required"}
-    cmd = [
-        sys.executable, "tools/confluence_tool.py",
-        "--input-json", input_json,
-        "--branch", branch,
-    ]
-    release_type = params.get("type")
-    if release_type:
-        cmd.extend(["--type", release_type])
-    if params.get("force_rebuild"):
-        cmd.append("--force-rebuild")
-    if params.get("dry_run"):
-        cmd.append("--dry-run")
-    return run_subprocess(cmd)
+
+    try:
+        from tools.mcp_confluence_client import upload_releases, _get_env
+        with open(input_json) as f:
+            rows = json.load(f)
+
+        parent_id = _get_env("CONFLUENCE_PAGE_ID")
+        if not parent_id:
+            return {"ok": False, "error": "CONFLUENCE_PAGE_ID not set in tools/.env"}
+
+        result = upload_releases(
+            "atlassian",
+            parent_id=parent_id,
+            branch=branch,
+            rows=rows,
+            release_type=params.get("type"),
+            force_rebuild=params.get("force_rebuild", False),
+            dry_run=params.get("dry_run", False),
+        )
+        return {"ok": True, "stdout": json.dumps(result, indent=2)}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "retryable": False}
 
 
-def run_ci_status(params):
-    """Fetch CI status via github_tool.py."""
-    sha = params.get("commit_sha")
-    if sha:
-        cmd = [
-            sys.executable, "tools/github_tool.py",
-            "--commit-status", sha,
-        ]
-    else:
-        cmd = [
-            sys.executable, "tools/github_tool.py",
-            "--branch", params.get("branch", "master"),
-            "--count", str(params.get("count", 1)),
-            "--ci-status",
-        ]
-    return run_subprocess(cmd)
+def run_subprocess(cmd, stream=False):
+    """Execute a subprocess and capture output.
 
-
-def run_shell_pipeline(params):
-    """Run the full pipeline via run_goldimage_pipeline.sh (if available)."""
-    script = "tools/run_goldimage_pipeline.sh"
-    if not os.path.isfile(script):
-        return {"ok": False, "error": f"{script} not found. Use release_query.py + confluence_tool.py instead.", "retryable": False}
-    action = params.get("action", "pipeline")
-    branches = params.get("branches", "master")
-    count = str(params.get("count", 1))
-    cmd = ["bash", script, action, branches, count]
-    if params.get("dry_run"):
-        cmd.append("--dry-run")
-    return run_subprocess(cmd)
-
-
-def run_sourcegraph_validate(params):
-    """Validate release merge status via sourcegraph_tool.py."""
-    cmd = [sys.executable, "tools/sourcegraph_tool.py"]
-    input_json = params.get("input_json")
-    pr_titles = params.get("pr_titles")
-    if input_json:
-        cmd.extend(["--input-json", input_json])
-    elif pr_titles:
-        cmd.extend(["--pr-titles", pr_titles])
-    else:
-        return {"ok": False, "error": "input_json or pr_titles is required"}
-    output_json = params.get("output_json")
-    if output_json:
-        cmd.extend(["--output-json", output_json])
-    fmt = params.get("format", "json")
-    cmd.extend(["--format", fmt])
-    return run_subprocess(cmd)
-
-
-def run_subprocess(cmd):
-    """Execute a subprocess and capture output."""
+    When *stream* is True, stdout and stderr are printed in real-time
+    while also being captured for retry/error checking.
+    """
+    if stream:
+        return _run_streaming(cmd)
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=600,
@@ -309,6 +286,51 @@ def run_subprocess(cmd):
         return {"ok": False, "error": str(e), "retryable": False}
 
 
+def _run_streaming(cmd):
+    """Run a subprocess with real-time stdout/stderr streaming."""
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+        stdout_lines = []
+        stderr_lines = []
+
+        def _drain_stderr():
+            for line in proc.stderr:
+                stderr_lines.append(line)
+                print(line, end="", file=sys.stderr, flush=True)
+
+        t = threading.Thread(target=_drain_stderr, daemon=True)
+        t.start()
+
+        for line in proc.stdout:
+            stdout_lines.append(line)
+            print(line, end="", flush=True)
+
+        proc.wait(timeout=600)
+        t.join(timeout=5)
+
+        stdout = "".join(stdout_lines)
+        stderr = "".join(stderr_lines)
+        retryable = _is_retryable_stderr(stderr) if proc.returncode != 0 else False
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+            "retryable": retryable,
+            "streamed": True,
+        }
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return {"ok": False, "error": "Command timed out after 600s",
+                "retryable": True, "streamed": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e),
+                "retryable": False, "streamed": True}
+
+
 def _is_retryable_stderr(stderr):
     """Check if the tool's stderr indicates a retryable exception type."""
     retryable_types = ("RateLimitError", "NetworkError", "HttpError")
@@ -319,13 +341,88 @@ def _is_retryable_stderr(stderr):
 
 
 TOOL_REGISTRY = {
-    "github_releases": run_github_releases,
-    "jira_epic_search": run_jira_epic_search,
+    "release_query": run_release_query,
     "confluence_update": run_confluence_update,
-    "ci_status": run_ci_status,
-    "shell_pipeline": run_shell_pipeline,
-    "sourcegraph_validate": run_sourcegraph_validate,
 }
+
+_DISCREPANCY_KEYWORDS = (
+    "mismatch", "skipping", "skip", "failed", "error:",
+    "missing", "warning", "not found", "unavailable",
+)
+
+
+def _extract_discrepancies(stderr):
+    """Extract discrepancy and warning lines from tool stderr output."""
+    if not stderr:
+        return []
+    seen = set()
+    lines = []
+    for line in stderr.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lower = stripped.lower()
+        if any(kw in lower for kw in _DISCREPANCY_KEYWORDS):
+            if stripped not in seen:
+                seen.add(stripped)
+                lines.append(stripped)
+    return lines
+
+
+import re as _re
+
+_STAGE_PATTERNS = [
+    ("Releases Extracted",
+     r"\[release-query\] Output: (\d+) rows",
+     lambda m: "%s release(s)" % m.group(1)),
+    ("Gerrit Commits",
+     r"\[release-query\] Gerrit: (\d+) commits",
+     lambda m: "%s commit(s)" % m.group(1)),
+    ("GitHub Commits",
+     r"\[release-query\] GitHub: (\d+) commits",
+     lambda m: "%s commit(s)" % m.group(1)),
+    ("CI Status",
+     r"\[release-query\] CI status fetched for (\d+) unique commit",
+     lambda m: "%s commit(s) checked" % m.group(1)),
+    ("RPM Download",
+     r"\[release-query\] Downloading (\d+) file",
+     lambda m: "%s file(s) queued" % m.group(1)),
+    ("Changelog",
+     r"\[release-query\] Generating changelog",
+     lambda m: "generated"),
+    ("SFTP Upload",
+     r"\[release-query\] SFTP upload complete: (\d+) file",
+     lambda m: "%s file(s) uploaded" % m.group(1)),
+    ("Confluence",
+     r"\[release-query\] Confluence upload complete: (\d+) added, (\d+) already exist",
+     lambda m: "+%s added, %s skipped" % (m.group(1), m.group(2))),
+]
+
+
+def _extract_stage_stats(stderr):
+    """Parse pipeline stage results from release_query stderr output."""
+    if not stderr:
+        return []
+    stages = []
+    for label, pattern, fmt in _STAGE_PATTERNS:
+        m = _re.search(pattern, stderr)
+        if m:
+            stages.append((label, fmt(m)))
+    # Count successful RPM downloads from "Saved" lines
+    saved = len(_re.findall(r"\[release-query\] \[[A-Z]+\] Saved", stderr))
+    if saved:
+        for i, (label, _) in enumerate(stages):
+            if label == "RPM Download":
+                stages[i] = ("RPM Download", "%d file(s) downloaded" % saved)
+                break
+    # Count changelog files generated
+    changelogs = len(_re.findall(r"\[release-query\] \[[A-Z]+\] changelog", stderr))
+    if changelogs:
+        for i, (label, _) in enumerate(stages):
+            if label == "Changelog":
+                stages[i] = ("Changelog", "%d file(s) generated" % changelogs)
+                break
+    return stages
 
 
 # ---------------------------------------------------------------------------
@@ -374,30 +471,51 @@ def dispatch_steps(steps, dry_run=False, fail_fast=False, verbose=False):
                 continue
             break
 
+        stderr = result.get("stderr", "")
+        discrepancies = _extract_discrepancies(stderr)
+        stage_stats = _extract_stage_stats(stderr)
+
         if result.get("ok"):
-            stdout = result.get("stdout", "")
-            preview = stdout[:500] if stdout else "(no output)"
             print("  OK")
-            if verbose and stdout:
+            stdout = result.get("stdout", "")
+            if not result.get("streamed") and stdout:
                 print(stdout)
-            elif stdout:
-                print("  Output: %s%s" % (preview, "..." if len(stdout) > 500 else ""))
         else:
-            err = result.get("error") or result.get("stderr", "")
-            print("  FAILED: %s" % err[:300])
+            err = result.get("error") or stderr
+            print("  FAILED: %s" % err[:500])
             if fail_fast:
                 print("  --fail-fast: aborting.")
-                results.append({"step": step_num, "tool": tool, "ok": False, "error": err})
+                results.append({"step": step_num, "tool": tool, "ok": False,
+                                "error": err, "discrepancies": discrepancies,
+                                "stage_stats": stage_stats})
                 break
 
-        results.append({"step": step_num, "tool": tool, "ok": result.get("ok", False)})
+        results.append({"step": step_num, "tool": tool,
+                        "ok": result.get("ok", False),
+                        "discrepancies": discrepancies,
+                        "stage_stats": stage_stats})
 
     return results
 
 
 def print_summary(results):
-    """Print a final summary table."""
-    print("\n%s SUMMARY %s" % ("=" * 30, "=" * 30))
+    """Print final summary with stage status, step results, and discrepancies."""
+
+    # Stage status
+    all_stages = []
+    for r in results:
+        all_stages.extend(r.get("stage_stats", []))
+
+    if all_stages:
+        print("\n%s PIPELINE STATUS %s" % ("=" * 26, "=" * 26))
+        print("%-22s %s" % ("Stage", "Result"))
+        print("-" * 68)
+        for label, detail in all_stages:
+            print("%-22s %s" % (label, detail))
+        print("-" * 68)
+
+    # Step results
+    print("\n%s STEP RESULTS %s" % ("=" * 27, "=" * 27))
     print("%-6s %-25s %-10s" % ("Step", "Tool", "Status"))
     print("-" * 50)
     for r in results:
@@ -408,6 +526,20 @@ def print_summary(results):
     print("-" * 50)
     ok_count = sum(1 for r in results if r.get("ok"))
     print("Total: %d/%d steps succeeded." % (ok_count, len(results)))
+
+    # Discrepancies
+    all_discrepancies = []
+    for r in results:
+        all_discrepancies.extend(r.get("discrepancies", []))
+
+    if all_discrepancies:
+        print("\n%s DISCREPANCIES (%d) %s" % (
+            "=" * 23, len(all_discrepancies), "=" * 23))
+        for d in all_discrepancies:
+            print("  - %s" % d)
+        print("-" * 68)
+    else:
+        print("\nNo discrepancies detected.")
 
 
 # ---------------------------------------------------------------------------

@@ -242,16 +242,27 @@ def run_confluence_update(params):
         with open(input_json) as f:
             rows = json.load(f)
 
-        parent_id = _get_env("CONFLUENCE_PAGE_ID")
+        release_type = (params.get("type") or "").upper()
+        if not release_type:
+            from tools.mcp_confluence_client import detect_release_type
+            release_type = detect_release_type(rows)
+
+        aos_page_id = _get_env("AOS_CONFLUENCE_PAGE_ID")
+        pc_page_id = _get_env("PC_CONFLUENCE_PAGE_ID")
+        fallback_id = _get_env("CONFLUENCE_PAGE_ID")
+        page_id_map = {"AOS": aos_page_id or fallback_id,
+                       "PC": pc_page_id or fallback_id}
+        parent_id = page_id_map.get(release_type, fallback_id)
+
         if not parent_id:
-            return {"ok": False, "error": "CONFLUENCE_PAGE_ID not set in tools/.env"}
+            return {"ok": False, "error": f"No Confluence page ID set for {release_type} in tools/.env"}
 
         result = upload_releases(
             "atlassian",
             parent_id=parent_id,
             branch=branch,
             rows=rows,
-            release_type=params.get("type"),
+            release_type=release_type,
             force_rebuild=params.get("force_rebuild", False),
             dry_run=params.get("dry_run", False),
         )

@@ -60,13 +60,15 @@ JIRA_API_TOKEN=...                # Personal access token (Bearer)
 # Confluence
 CONFLUENCE_BASE_URL=https://confluence.example.com
 CONFLUENCE_API_TOKEN=...          # API token or PAT (Bearer)
-CONFLUENCE_PAGE_ID=123456         # Parent page ID — child pages auto-resolved per branch/type
+AOS_CONFLUENCE_PAGE_ID=123456     # Parent page ID for AOS releases
+PC_CONFLUENCE_PAGE_ID=789012      # Parent page ID for PC releases
+CONFLUENCE_PAGE_ID=123456         # Fallback parent page ID (used if type-specific IDs not set)
 
 # Sourcegraph
 SOURCEGRAPH_TOKEN=...             # Sourcegraph access token for Gerrit merge validation
 ```
 
-> **Note:** `CONFLUENCE_PAGE_ID` is the **parent page**. The tool automatically discovers or creates child pages for each branch + release type (AOS/PC) combination. No per-branch page IDs needed.
+> **Note:** `AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` are separate parent pages for AOS and PC releases respectively. The tool automatically discovers or creates child pages per branch under the appropriate parent. Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set.
 
 > **Warning:** Never commit `tools/.env`. It is excluded via `.gitignore`.
 
@@ -127,7 +129,7 @@ python3.14 agent_runner.py --dry-run "Full pipeline for master last 10"
 ### `tools/confluence_tool.py`
 
 Confluence table updater with automatic page routing:
-- Uses `CONFLUENCE_PAGE_ID` as parent page, discovers/creates child pages per branch + type
+- Uses `AOS_CONFLUENCE_PAGE_ID` / `PC_CONFLUENCE_PAGE_ID` as separate parent pages, discovers/creates child pages per branch
 - Validates changelog and RPM URLs (parallel HEAD checks), shows "Data not found" for invalid links
 - Rebuilds entire table sorted by merge date (newest first) when adding rows
 - `--force-rebuild` rebuilds the table from JSON even when no new rows to add
@@ -158,12 +160,12 @@ Mission decomposition and tool dispatch. Uses `cursor-sdk` to decompose natural 
 
 The tool automatically manages Confluence pages:
 
-1. `CONFLUENCE_PAGE_ID` in `tools/.env` points to a **parent page** (e.g. "AOS/PC Releases:")
-2. When updating, the tool lists child pages and matches by branch name + release type in the title
-3. If no matching child exists, a new page is created (e.g. "PC Release ganges-7.3")
-4. Release type is auto-detected from JSON data (PC if versions contain "pc.", otherwise AOS)
-
-No per-branch page IDs are needed.
+1. `AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` in `tools/.env` point to **separate parent pages** for each release type
+2. When updating, the tool routes AOS releases to the AOS parent and PC releases to the PC parent
+3. Under each parent, child pages are matched by branch name + release type in the title
+4. If no matching child exists, a new page is created (e.g. "PC Release ganges-7.3")
+5. Existing entries are checked by GoldImage version to avoid duplication
+6. Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set
 
 ## Confluence Table Format
 

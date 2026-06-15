@@ -23,11 +23,13 @@ When the user asks to "update Confluence page" for release details, perform this
 
 ### Automatic page routing
 
-`CONFLUENCE_PAGE_ID` in `tools/.env` is the **parent page**. The tool automatically:
-- Discovers child pages under the parent
+`AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` in `tools/.env` are **separate parent pages** for each release type. The tool automatically:
+- Routes AOS releases to `AOS_CONFLUENCE_PAGE_ID` and PC releases to `PC_CONFLUENCE_PAGE_ID`
+- Discovers child pages under the appropriate parent
 - Matches by branch name + release type (AOS/PC) in the page title
 - Creates a new child page (e.g. "PC Release ganges-7.3") if none exists
-- Release type is auto-detected from the JSON data (PC if versions contain "pc", otherwise AOS)
+- Checks existing entries by GoldImage version to avoid duplication
+- Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set
 - Use `--type AOS` or `--type PC` to override auto-detection
 
 ### Table management
@@ -42,8 +44,9 @@ When the user asks to "update Confluence page" for release details, perform this
 ### Confluence credentials
 
 - `CONFLUENCE_BASE_URL` and `CONFLUENCE_API_TOKEN` come from the Atlassian MCP server config in `.cursor/rules/mcp.json`
-- `CONFLUENCE_PAGE_ID` (parent page) is set in `tools/.env`
-- Do NOT hardcode page IDs per branch — the tool resolves them automatically
+- `AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` (parent pages per type) are set in `tools/.env`
+- `CONFLUENCE_PAGE_ID` is the fallback parent page if type-specific IDs are not set
+- Do NOT hardcode page IDs per branch — the tool resolves child pages automatically
 
 ## Fallback workflow
 

@@ -209,9 +209,12 @@ python3 tools/confluence_tool.py --input-json /tmp/releases.json --branch <branc
 
 ## Confluence update workflow
 
-When updating Confluence, `confluence_tool.py` handles page routing automatically:
-- `CONFLUENCE_PAGE_ID` in `tools/.env` is the **parent page**
-- Child pages are discovered/created per branch + release type (AOS/PC)
+When updating Confluence, the tool routes AOS and PC to separate parent pages:
+- `AOS_CONFLUENCE_PAGE_ID` in `tools/.env` is the parent page for AOS releases
+- `PC_CONFLUENCE_PAGE_ID` in `tools/.env` is the parent page for PC releases
+- Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set
+- Child pages are discovered/created per branch under the appropriate parent
+- Existing entries are deduplicated by GoldImage version name
 - Release type is auto-detected from JSON (override with `--type AOS` or `--type PC`)
 - Use `--force-rebuild` to rebuild existing tables (re-sort, re-validate URLs)
 

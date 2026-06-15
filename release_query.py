@@ -52,14 +52,17 @@ from tools.mcp_sourcegraph_client import TOOL_PREFIX
 from tools.mcp_github_client import fetch_postmerge_ci
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration (loaded from tools/.env via _get_env)
 # ---------------------------------------------------------------------------
 
 DEFAULT_SERVER_KEY = "gw-sourcegraph"
-DEFAULT_REPO = "nugerrit.ntnxdpro.com/main"
-GITHUB_REPO = "github.com/nutanix-core/aos-goldimage-os"
-#BASE_URL = "https://endor.corp.nutanix.com"
-BASE_URL = "http://uranus.corp.nutanix.com/~rahul.kumar3"
+
+DEFAULT_REPO = _get_env("DEFAULT_REPO")
+GITHUB_REPO = _get_env("GITHUB_REPO")
+BASE_URL = _get_env("BASE_URL")
+ARTIFACTORY_BASE = _get_env("ARTIFACTORY_BASE")
+ARTIFACTORY_API_STORAGE = _get_env("ARTIFACTORY_API_STORAGE")
+
 ENDOR_AOS_RHEL9_MASTER = f"{BASE_URL}/GoldImages/Centos_SVM/Master"
 ENDOR_AOS_STS_BASE = f"{BASE_URL}/GoldImages/Centos_SVM/STS"
 ENDOR_AOS_RHEL8_BASE = f"{BASE_URL}/GoldImages/Centos_SVM/STS"
@@ -252,6 +255,83 @@ def _resolve_sg_token():
     return None
 
 
+def _resolve_fix_version_branches(branch):
+    """Resolve latest Gerrit branches from Jira project fix versions.
+
+    For non-master branches (e.g. ``ganges-7.5``), CRs are merged to
+    specific Gerrit branches derived from fix versions (e.g.
+    ``ganges-7.5.1.8-stable-pc``).  Since Gerrit branches accumulate
+    commits from earlier branches, searching the latest one is enough
+    to capture all releases.
+
+    Uses the Jira project versions API to discover available fix
+    versions, then returns the top candidates (sorted by version
+    descending) for both AOS and PC.
+
+    Returns a list of branch strings to search (may be empty).
+    """
+    if branch == "master":
+        return []
+    m = re.match(r"ganges-([\d.]+)", branch)
+    if not m:
+        return []
+    branch_ver = m.group(1)
+
+    jira_token = _resolve_jira_token()
+    jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
+    if not jira_token:
+        return []
+
+    url = f"{jira_url}/rest/api/2/project/ENG/versions"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {jira_token}")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            all_versions = json.loads(resp.read())
+    except Exception:
+        return []
+
+    def _ver_key(v):
+        return tuple(int(p) for p in v.split(".") if p.isdigit())
+
+    # Collect fix versions matching this branch for AOS and PC.
+    # AOS versions: "7.5.1.8", "7.5.1.3", etc.
+    # PC versions: "pc.7.5.1.8" → "7.5.1.8", etc.
+    # Only keep versions with more parts than the base (e.g. 7.5.1.x not 7.5).
+    base_depth = len(branch_ver.split("."))
+    versions_aos = []
+    versions_pc = []
+    for v in all_versions:
+        name = v.get("name", "")
+        if name.startswith(f"pc.{branch_ver}."):
+            stripped = name[3:]
+            if len(stripped.split(".")) > base_depth:
+                versions_pc.append(stripped)
+        elif name.startswith(f"{branch_ver}.") and not name.startswith("pc."):
+            if len(name.split(".")) > base_depth:
+                versions_aos.append(name)
+
+    # Sort descending and take top candidates to search.
+    # Not all Jira versions have corresponding Gerrit branches yet,
+    # so we try the top 3 — the Sourcegraph search is fast and
+    # duplicates are deduped by commit OID.
+    MAX_CANDIDATES = 3
+    versions_aos.sort(key=_ver_key, reverse=True)
+    versions_pc.sort(key=_ver_key, reverse=True)
+
+    branches = []
+    for ver in versions_aos[:MAX_CANDIDATES]:
+        branches.append(f"ganges-{ver}-stable")
+    for ver in versions_pc[:MAX_CANDIDATES]:
+        branches.append(f"ganges-{ver}-stable-pc")
+
+    if branches:
+        _log(f"Resolved fix-version Gerrit branches: {branches}")
+    return branches
+
+
 def fetch_gerrit_releases(server_key, branch, count):
     """Fetch release commits from Gerrit via Sourcegraph streaming API.
 
@@ -260,20 +340,39 @@ def fetch_gerrit_releases(server_key, branch, count):
     if the streaming API is unavailable.
 
     For non-master branches (e.g. ``ganges-7.6``), searches:
-      1. ``rev:ganges-7.6-stable`` — the branch-specific AOS Gerrit branch
-      2. ``rev:ganges-7.6-stable-pc`` — the branch-specific PC Gerrit branch
-      3. default branch (no rev:) — catches commits not yet cherry-picked
+      1. Fix-version-specific branches (e.g. ``ganges-7.5.1.8-stable-pc``)
+         resolved from Jira EPIC fix versions — these carry the latest commits.
+      2. ``rev:ganges-7.6-stable`` — the base AOS Gerrit branch
+      3. ``rev:ganges-7.6-stable-pc`` — the base PC Gerrit branch
+      4. default branch (no rev:) — catches commits not yet cherry-picked
     """
-    repo_filter = r"repo:^nugerrit\.ntnxdpro\.com/main$"
+    escaped_repo = re.escape(DEFAULT_REPO)
+    repo_filter = f"repo:^{escaped_repo}$"
     if branch == "master":
         query = f'type:commit {repo_filter} message:"Release gold image" message:"main-master"'
         commits = _sg_stream_search(query, count=count * 4)
         if commits:
             return commits
     else:
-        # Search branch-specific Gerrit branches first
         all_commits = []
         seen_oids = set()
+
+        # Search fix-version-specific Gerrit branches first (latest
+        # branches accumulate all earlier commits, so one search per
+        # type is enough).
+        fix_branches = _resolve_fix_version_branches(branch)
+        for rev in fix_branches:
+            query = (
+                f'type:commit {repo_filter} rev:{rev} '
+                f'message:"Release gold image" '
+            )
+            for c in _sg_stream_search(query, count=count * 4):
+                oid = c.get("commit", "")
+                if oid not in seen_oids:
+                    seen_oids.add(oid)
+                    all_commits.append(c)
+
+        # Also search base branch Gerrit branches
         gerrit_branch = f"{branch}-stable"
         for rev in (gerrit_branch, f"{gerrit_branch}-pc"):
             query = (
@@ -576,27 +675,62 @@ def _select_epic_from_issues(issues, release_type):
 
 
 def fetch_gerrit_cr_from_jira(ticket_keys, branch):
-    """Extract Gerrit Code Review URL from Jira ticket git-tracker comments.
+    """Extract Gerrit CR URL and merged date from Jira git-tracker comments.
 
     Searches ``===git tracker===`` comments on each ticket for one whose
     ``Branch`` or ``JIRA Version (branch equiv)`` matches *branch*.
+
+    If no git-tracker comment is found on the provided tickets, searches
+    the EPIC's child issues (via ``"Epic Link" = <key>`` JQL) for
+    git-tracker comments as a fallback.
+
+    The comment's ``created`` timestamp (from the Jira API) is used as the
+    authoritative CR **merged date**, since the git-tracker bot posts the
+    comment immediately after the CR is merged on Gerrit.
 
     Args:
         ticket_keys: list of Jira ticket keys (e.g. ["ENG-933882"]).
         branch:      query branch (e.g. "ganges-7.6" or "master").
 
     Returns:
-        The ``Code Review URL`` string, or "" if not found.
+        dict with ``cr_url`` (str) and ``merged_date`` (ISO str or None).
+        Returns ``{"cr_url": "", "merged_date": None}`` if not found.
     """
+    empty = {"cr_url": "", "merged_date": None}
     jira_token = _resolve_jira_token()
     jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
     if not jira_token:
         _log("Cannot fetch Gerrit CR: no Jira token available")
-        return ""
+        return empty
 
-    # Normalise branch for matching: "ganges-7.6" -> "7.6"
     branch_short = re.sub(r'^ganges-', '', branch)
 
+    candidates = _search_git_tracker_comments(
+        ticket_keys, branch_short, branch, jira_url, jira_token)
+
+    if not candidates:
+        # Fallback: search child issues of each EPIC for git-tracker comments
+        epic_children = _fetch_epic_children(ticket_keys, jira_url, jira_token)
+        if epic_children:
+            _log(f"EPIC has no git-tracker; checking {len(epic_children)} child issue(s)")
+            candidates = _search_git_tracker_comments(
+                epic_children, branch_short, branch, jira_url, jira_token)
+
+    if not candidates:
+        return empty
+
+    best = max(candidates, key=lambda x: x.get("merged_date") or "")
+    return best
+
+
+def _search_git_tracker_comments(ticket_keys, branch_short, branch,
+                                 jira_url, jira_token):
+    """Search git-tracker comments on a list of Jira tickets.
+
+    Returns list of candidate dicts with ``cr_url`` and ``merged_date``.
+    Stops early once a ticket yields matches.
+    """
+    candidates = []
     for key in ticket_keys:
         try:
             url = f"{jira_url}/rest/api/2/issue/{key}?fields=comment"
@@ -615,7 +749,6 @@ def fetch_gerrit_cr_from_jira(ticket_keys, branch):
             body = c.get("body", "")
             if "===git tracker===" not in body:
                 continue
-            # Parse branch-like fields
             ver_match = re.search(
                 r'JIRA Version \(branch equiv\)\s*:\s*(.+)', body)
             branch_match = re.search(r'Branch\s*:\s*(.+)', body)
@@ -627,15 +760,87 @@ def fetch_gerrit_cr_from_jira(ticket_keys, branch):
             jira_ver = ver_match.group(1).strip() if ver_match else ""
             gerrit_branch = branch_match.group(1).strip() if branch_match else ""
 
-            # Match: "master"=="master", "7.6"=="7.6",
-            # or gerrit_branch starts with "ganges-7.6"
             if (branch_short == jira_ver
                     or branch_short == gerrit_branch
                     or branch == gerrit_branch
                     or gerrit_branch.startswith(f"ganges-{branch_short}")
                     or gerrit_branch.startswith(branch)):
-                return cr_match.group(1)
-    return ""
+                comment_created = c.get("created", "")
+                candidates.append({
+                    "cr_url": cr_match.group(1),
+                    "merged_date": comment_created or None,
+                })
+
+        if candidates:
+            break
+
+    return candidates
+
+
+def _fetch_epic_children(epic_keys, jira_url, jira_token):
+    """Fetch child issue keys of one or more EPIC tickets.
+
+    Tries ``"Epic Link" = <key>`` JQL first, then falls back to
+    the issue's ``issuelinks`` and ``subtasks`` fields.
+
+    Returns a list of child ticket keys (strings).
+    """
+    import urllib.parse
+
+    children = []
+    seen = set()
+
+    for key in epic_keys:
+        if not re.match(r'^[A-Z]+-\d+$', key):
+            continue
+
+        # JQL search for issues with this Epic Link
+        jql = f'"Epic Link" = {key}'
+        params = urllib.parse.urlencode({
+            "jql": jql, "fields": "key", "maxResults": 20,
+        })
+        try:
+            url = f"{jira_url}/rest/api/2/search?{params}"
+            req = urllib.request.Request(url)
+            req.add_header("Authorization", f"Bearer {jira_token}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            for issue in data.get("issues", []):
+                k = issue.get("key", "")
+                if k and k not in seen:
+                    seen.add(k)
+                    children.append(k)
+        except Exception:
+            pass
+
+        # Also check issuelinks and subtasks on the EPIC itself
+        try:
+            url = f"{jira_url}/rest/api/2/issue/{key}?fields=issuelinks,subtasks"
+            req = urllib.request.Request(url)
+            req.add_header("Authorization", f"Bearer {jira_token}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+            for link in data.get("fields", {}).get("issuelinks", []):
+                for direction in ("inwardIssue", "outwardIssue"):
+                    linked = link.get(direction, {})
+                    k = linked.get("key", "")
+                    if k and k not in seen:
+                        seen.add(k)
+                        children.append(k)
+            for st in data.get("fields", {}).get("subtasks", []):
+                k = st.get("key", "")
+                if k and k not in seen:
+                    seen.add(k)
+                    children.append(k)
+        except Exception:
+            pass
+
+        if children:
+            break
+
+    return children
 
 
 def fetch_ticket_summaries(ticket_keys):
@@ -865,7 +1070,7 @@ def _match_gerrit_and_extract(version, gerrit_commits, excluded_titles,
 
     # Initial values from the GitHub commit message (fallback)
     tickets_match = re.search(
-        r'Tickets\s+Resolved\s*:\s*(.+?)(?:\n|$)', github_message, re.IGNORECASE)
+        r'Tickets?\s+Resolved\s*:\s*(.+?)(?:\n|$)', github_message, re.IGNORECASE)
     tickets_resolved = (
         [t.strip() for t in tickets_match.group(1).split(",") if t.strip()]
         if tickets_match else []
@@ -883,7 +1088,7 @@ def _match_gerrit_and_extract(version, gerrit_commits, excluded_titles,
 
     pr_num_match = re.search(r'\(#(\d+)\)\s*$', github_message.split("\n")[0])
     release_pr_link = (
-        f"https://github.com/nutanix-core/aos-goldimage-os/pull/{pr_num_match.group(1)}"
+        f"https://{GITHUB_REPO}/pull/{pr_num_match.group(1)}"
         if pr_num_match else ""
     )
 
@@ -900,14 +1105,14 @@ def _match_gerrit_and_extract(version, gerrit_commits, excluded_titles,
             score += 1
         if score == 0:
             return 0
-        # Boost/penalize based on PC prefix matching the requested type
+        # Boost based on PC prefix matching the requested type.
+        # Prefer type-matched commits but don't penalize below zero —
+        # combined releases may only have one Gerrit commit for both types.
         has_pc_prefix = bool(re.match(r'^PC\s*:', gc_title, re.IGNORECASE))
         if _is_pc and has_pc_prefix:
             score += 50
-        elif _is_pc and not has_pc_prefix:
-            score -= 25
-        elif not _is_pc and has_pc_prefix:
-            score -= 25
+        elif not _is_pc and not has_pc_prefix:
+            score += 50
         return score
 
     best_gc = None
@@ -927,7 +1132,7 @@ def _match_gerrit_and_extract(version, gerrit_commits, excluded_titles,
         gerrit_cr_url = best_gc.get("url", "")
         gerrit_date = best_gc.get("date")
         gc_msg = best_gc.get("message", "")
-        tm = re.search(r'Tickets\s+Resolved\s*:\s*(.+?)(?:\n|$)',
+        tm = re.search(r'Tickets?\s+Resolved\s*:\s*(.+?)(?:\n|$)',
                        gc_msg, re.IGNORECASE)
         if tm:
             tickets_resolved = [
@@ -1115,7 +1320,6 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
                 aos_epic = (aos_validation.get("epic_key") if aos_validation else None)
                 if not aos_epic or not _is_valid_ticket(aos_epic):
                     aos_epic = "--"
-            aos_merge = aos_gerrit_date or gerrit_date_any or date
             urls = build_endor_urls(aos_version, "aos", branch)
             row_data = {
                 "goldimage_version": aos_version,
@@ -1123,9 +1327,10 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
                 "main_ticket": aos_epic,
                 "changelog_url": urls["changelog"],
                 "rpm_url": urls["rpm"],
-                "merge_date": format_merge_date(aos_merge),
+                "merge_date": "N/A",
                 "github_date": format_merge_date(date),
-                "sg_date": format_merge_date(aos_gerrit_date) if aos_gerrit_date else "N/A",
+                "sg_date": "N/A",
+                "gerrit_date": None,
                 "notes": branch,
                 "commit": commit_sha,
             }
@@ -1144,7 +1349,6 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
                 pc_epic = (pc_validation.get("epic_key") if pc_validation else None)
                 if not pc_epic or not _is_valid_ticket(pc_epic):
                     pc_epic = "--"
-            pc_merge = pc_gerrit_date or gerrit_date_any or date
             urls = build_endor_urls(pc_version, "pc", branch)
             row_data = {
                 "goldimage_version": pc_version,
@@ -1152,9 +1356,10 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
                 "main_ticket": pc_epic,
                 "changelog_url": urls["changelog"],
                 "rpm_url": urls["rpm"],
-                "merge_date": format_merge_date(pc_merge),
+                "merge_date": "N/A",
                 "github_date": format_merge_date(date),
-                "sg_date": format_merge_date(pc_gerrit_date) if pc_gerrit_date else "N/A",
+                "sg_date": "N/A",
+                "gerrit_date": None,
                 "notes": branch,
                 "commit": commit_sha,
             }
@@ -1324,16 +1529,7 @@ def format_markdown(rows, validate_urls=False, with_github_date=False, with_sg_d
 # Artifactory RPM download
 # ---------------------------------------------------------------------------
 
-ARTIFACTORY_BASE = (
-    "https://artifactory.dyn.ntnxdpro.com:443/artifactory/"
-    "local-canaveral-generic/nutanix-core/aos-goldimage/os/"
-    "build-artifacts/{build_num}"
-)
-ARTIFACTORY_API_STORAGE = (
-    "https://artifactory.dyn.ntnxdpro.com:443/artifactory/"
-    "api/storage/local-canaveral-generic/nutanix-core/aos-goldimage/os/"
-    "build-artifacts/{build_num}"
-)
+
 
 
 def _extract_build_number(ci_url):
@@ -1615,9 +1811,9 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
         _log(f"Fetching Jira summaries for {len(all_ticket_keys)} ticket(s)...")
         ticket_summaries = fetch_ticket_summaries(list(all_ticket_keys))
 
-    # Fetch Gerrit CR URLs from Jira git-tracker comments (parallel per row)
-    _log("Fetching Gerrit CR URLs from Jira ticket comments...")
-    cr_url_cache = {}  # ticket_keys_tuple -> cr_url
+    # Fetch Gerrit CR URLs + merged dates from Jira git-tracker comments
+    _log("Fetching Gerrit CR URLs and merged dates from Jira ticket comments...")
+    cr_cache = {}  # ticket_keys_tuple -> {"cr_url": ..., "merged_date": ...}
 
     def _fetch_cr_for_row(row):
         ver = row.get("goldimage_version", "")
@@ -1631,21 +1827,21 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
             if epic_key not in keys:
                 keys.append(epic_key)
         if not keys:
-            return ver, ""
+            return ver, {"cr_url": "", "merged_date": None}
         cache_key = tuple(sorted(keys))
-        if cache_key in cr_url_cache:
-            return ver, cr_url_cache[cache_key]
-        cr = fetch_gerrit_cr_from_jira(keys, branch)
-        cr_url_cache[cache_key] = cr
-        return ver, cr
+        if cache_key in cr_cache:
+            return ver, cr_cache[cache_key]
+        result = fetch_gerrit_cr_from_jira(keys, branch)
+        cr_cache[cache_key] = result
+        return ver, result
 
-    cr_urls = {}
+    cr_data = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(_fetch_cr_for_row, r): r for r in rows}
         for fut in as_completed(futures):
-            ver, cr = fut.result()
-            if cr:
-                cr_urls[ver] = cr
+            ver, result = fut.result()
+            if result.get("cr_url") or result.get("merged_date"):
+                cr_data[ver] = result
 
     generated = []
 
@@ -1657,8 +1853,10 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
         ci_key = ci_key_map.get(rtype, "ci_cvm")
 
         # Override gerrit_cr_url with the one from Jira comments if found
-        if version in cr_urls:
-            row["gerrit_cr_url"] = cr_urls[version]
+        if version in cr_data:
+            vdata = cr_data[version]
+            if vdata.get("cr_url"):
+                row["gerrit_cr_url"] = vdata["cr_url"]
 
         build_num = _extract_build_number(
             row.get(ci_key, {}).get("url", ""))
@@ -1745,8 +1943,8 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
 
     Env vars (read from tools/.env):
         SFTP_HOST, SFTP_USERNAME, SFTP_PASSWORD, SFTP_PORT (default 22).
-        SFTP_REMOTE_BASE (optional) — prefix prepended to the relative
-        URL path.  Defaults to empty (CWD is already the web root).
+        SFTP_REMOTE_PATH — absolute remote path that maps to BASE_URL
+        (e.g. /mnt/phxitafsprd1/security/security/rahul_kumar).
 
     Returns:
         list of dicts with keys: rtype, version, file, remote_path.
@@ -1761,7 +1959,7 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
     username = _get_env("SFTP_USERNAME")
     password = _get_env("SFTP_PASSWORD")
     port = int(_get_env("SFTP_PORT", "22"))
-    remote_base = _get_env("SFTP_REMOTE_BASE", "")
+    remote_base = _get_env("SFTP_REMOTE_PATH") or _get_env("SFTP_REMOTE_BASE")
 
     if not host or not username:
         _log("SFTP upload skipped: SFTP_HOST or SFTP_USERNAME not set in .env")
@@ -1804,7 +2002,7 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
                     "rtype": rtype, "version": version,
                     "file": filename, "remote_path": remote_path,
                 })
-                _log(f"[{rtype}] Uploaded {filename} → sftp://{host}/{remote_path}")
+                _log(f"[{rtype}] Uploaded {filename} → sftp://{host}{remote_path}")
 
     except Exception as e:
         _log(f"SFTP upload error: {e}")
@@ -1822,12 +2020,14 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
 # ---------------------------------------------------------------------------
 
 def upload_to_confluence(rows, branch, filter_type="all"):
-    """Upload release rows to Confluence, auto-routing to child pages.
+    """Upload release rows to Confluence using separate AOS/PC parent pages.
 
-    Reads ``CONFLUENCE_PAGE_ID`` from ``tools/.env`` as the parent page.
-    For each release type present in *rows* (AOS, PC, or both when
-    *filter_type* is ``all``), finds or creates a child page named
-    ``<TYPE> Release <branch>`` and upserts the table rows.
+    Reads ``AOS_CONFLUENCE_PAGE_ID`` and ``PC_CONFLUENCE_PAGE_ID`` from
+    ``tools/.env``.  Each release type is routed to its own parent page
+    where child pages are discovered/created per branch.
+
+    Falls back to a single ``CONFLUENCE_PAGE_ID`` if the type-specific
+    variables are not set.
 
     Returns:
         list of dicts with keys: release_type, added, skipped, total, page_id.
@@ -1838,9 +2038,18 @@ def upload_to_confluence(rows, branch, filter_type="all"):
         _log("Confluence upload skipped: tools.mcp_confluence_client not available")
         return []
 
-    parent_id = _get_env("CONFLUENCE_PAGE_ID")
-    if not parent_id:
-        _log("Confluence upload skipped: CONFLUENCE_PAGE_ID not set in tools/.env")
+    aos_page_id = _get_env("AOS_CONFLUENCE_PAGE_ID")
+    pc_page_id = _get_env("PC_CONFLUENCE_PAGE_ID")
+    fallback_id = _get_env("CONFLUENCE_PAGE_ID")
+
+    page_id_map = {
+        "AOS": aos_page_id or fallback_id,
+        "PC": pc_page_id or fallback_id,
+    }
+
+    if not any(page_id_map.values()):
+        _log("Confluence upload skipped: no page IDs set in tools/.env "
+             "(need AOS_CONFLUENCE_PAGE_ID / PC_CONFLUENCE_PAGE_ID or CONFLUENCE_PAGE_ID)")
         return []
 
     types_in_rows = set(r.get("type", "AOS").upper() for r in rows)
@@ -1851,6 +2060,10 @@ def upload_to_confluence(rows, branch, filter_type="all"):
 
     results = []
     for rtype in sorted(types_in_rows):
+        parent_id = page_id_map.get(rtype)
+        if not parent_id:
+            _log(f"[{rtype}] Confluence upload skipped: no page ID configured")
+            continue
         type_rows = [r for r in rows if r.get("type", "AOS").upper() == rtype]
         if not type_rows:
             continue
@@ -1877,14 +2090,81 @@ def upload_to_confluence(rows, branch, filter_type="all"):
 
 
 def format_json(rows, output_path=None):
-    """Output as JSON."""
-    data = json.dumps(rows, indent=2)
+    """Output as JSON — dict keyed by goldimage version."""
+    keyed = {row.get("goldimage_version", "unknown"): row for row in rows}
+    data = json.dumps(keyed, indent=2)
     if output_path:
         with open(output_path, "w") as f:
             f.write(data)
         _log(f"Saved {len(rows)} releases to: {output_path}")
     else:
         print(data)
+
+
+# ---------------------------------------------------------------------------
+# Jira-based Gerrit merge date resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_merge_dates_from_jira(rows, branch):
+    """Update row merge dates using Jira git-tracker comment timestamps.
+
+    For each row, queries the Jira tickets (main_ticket + tickets_resolved)
+    for ``===git tracker===`` comments matching the branch. The comment's
+    ``created`` timestamp is the authoritative CR merged date — it is set
+    by the git-tracker bot immediately after the CR is merged on Gerrit.
+
+    Updates ``merge_date``, ``sg_date``, and ``gerrit_date`` in place.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    cache = {}
+
+    def _lookup(row):
+        ver = row.get("goldimage_version", "")
+        keys = []
+        main_tkt = row.get("main_ticket", "")
+        m = re.search(r'([A-Z]+-\d+)', main_tkt)
+        if m:
+            keys.append(m.group(1))
+        for t in row.get("tickets_resolved", []):
+            key = t.split()[0].rstrip(" -:")
+            if re.match(r'^[A-Z]+-\d+$', key) and key not in keys:
+                keys.append(key)
+        if not keys:
+            return ver, None
+        cache_key = tuple(sorted(keys))
+        if cache_key in cache:
+            return ver, cache[cache_key]
+        result = fetch_gerrit_cr_from_jira(keys, branch)
+        cache[cache_key] = result
+        return ver, result
+
+    _log("Resolving CR merged dates from Jira git-tracker comments...")
+    merged_map = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_lookup, r): r for r in rows}
+        for fut in as_completed(futures):
+            ver, result = fut.result()
+            if result and result.get("merged_date"):
+                merged_map[ver] = result
+
+    updated = 0
+    for row in rows:
+        ver = row.get("goldimage_version", "")
+        if ver not in merged_map:
+            continue
+        jira_merged = merged_map[ver]["merged_date"]
+        cr_url = merged_map[ver].get("cr_url", "")
+        formatted = format_merge_date(jira_merged)
+        if formatted != "N/A":
+            row["merge_date"] = formatted
+            row["sg_date"] = formatted
+            row["gerrit_date"] = jira_merged
+            if cr_url:
+                row["gerrit_cr_url"] = cr_url
+            updated += 1
+
+    _log(f"CR merged dates resolved: {updated}/{len(rows)} rows updated from Jira")
 
 
 # ---------------------------------------------------------------------------
@@ -1923,16 +2203,10 @@ Examples:
                         help="Skip postmerge CircleCI status fetch")
     parser.add_argument("--download-rpm", action="store_true", default=True,
                         help="Download rpm.txt from Artifactory (default: on)")
-    parser.add_argument("--no-download-rpm", action="store_true",
-                        help="Skip RPM download from Artifactory")
     parser.add_argument("--generate-changelog", action="store_true", default=True,
                         help="Generate changelog.txt from template (default: on)")
-    parser.add_argument("--no-generate-changelog", action="store_true",
-                        help="Skip changelog generation")
     parser.add_argument("--upload-sftp", action="store_true", default=True,
                         help="Upload changelog/rpm to SFTP server (default: on)")
-    parser.add_argument("--no-upload-sftp", action="store_true",
-                        help="Skip SFTP upload")
     parser.add_argument("--upload-confluence", action="store_true", default=True,
                         help="Upload release table to Confluence (default: on)")
     parser.add_argument("--no-upload-confluence", action="store_true",
@@ -1952,10 +2226,14 @@ Examples:
     # Fetch data
     _log(f"Fetching releases: branch={args.branch}, count={args.count}, filter={args.filter}")
 
-    gerrit_commits = fetch_gerrit_releases(server_key, args.branch, args.count)
+    # Fetch count+1 so the previous release is always available for
+    # the last displayed row (needed for previous_release, old_rpm diff, etc.)
+    fetch_count = args.count + 1
+
+    gerrit_commits = fetch_gerrit_releases(server_key, args.branch, fetch_count)
     _log(f"Gerrit: {len(gerrit_commits)} commits")
 
-    github_commits = fetch_github_releases(server_key, args.branch, args.count)
+    github_commits = fetch_github_releases(server_key, args.branch, fetch_count)
     _log(f"GitHub: {len(github_commits)} commits")
 
     github_epics = fetch_github_epics(server_key, args.branch)
@@ -1967,42 +2245,31 @@ Examples:
         args.branch, args.filter,
     )
 
+    # Resolve authoritative CR merged dates from Jira git-tracker comments.
+    # The git-tracker bot posts a comment immediately when the CR is merged
+    # on Gerrit; the comment's 'created' timestamp is the actual merge date.
+    _resolve_merge_dates_from_jira(rows, args.branch)
+
     # --no-* flags override defaults
     if args.no_upload_confluence:
         args.upload_confluence = False
-    if args.no_upload_sftp:
-        args.upload_sftp = False
-    if args.no_generate_changelog:
-        args.generate_changelog = False
-    if args.no_download_rpm:
-        args.download_rpm = False
     if args.no_ci_status:
         args.ci_status = False
 
-    # --upload-sftp implies --generate-changelog implies --download-rpm implies --ci-status
-    if args.upload_sftp:
-        args.generate_changelog = True
-    if args.generate_changelog:
-        args.download_rpm = True
-    if args.download_rpm:
-        args.ci_status = True
-
     display_count = args.count
-    if args.download_rpm:
-        # Keep extra rows so we can find one previous release per type
-        # (combined AOS/PC releases produce 2 rows per commit)
-        all_rows = rows
-        rows = rows[:display_count]
-    else:
-        all_rows = None
-        rows = rows[:display_count]
+    # Always keep all_rows so we can find the previous release per type
+    all_rows = rows
+    rows = rows[:display_count]
     _log(f"Output: {len(rows)} rows")
 
-    # Fetch postmerge CI status if requested
+    # Add branch as explicit field in every row
+    for row in all_rows:
+        row["branch"] = args.branch
+
+    # Fetch postmerge CI status for all rows (including extras for prev release)
     if args.ci_status:
         _log("Fetching postmerge CircleCI status from GitHub...")
-        # When downloading, we also need CI for the previous releases
-        ci_rows = all_rows if all_rows else rows
+        ci_rows = all_rows
         seen_shas = set()
         for row in ci_rows:
             sha = row.get("commit", "")
@@ -2011,7 +2278,6 @@ Examples:
                 row["ci_pcvm"] = {}
                 continue
             if sha in seen_shas:
-                # Same commit already fetched — reuse CI data
                 for prev in ci_rows:
                     if prev.get("commit") == sha and prev.get("ci_cvm"):
                         row["ci_cvm"] = prev["ci_cvm"]
@@ -2024,21 +2290,74 @@ Examples:
             row["ci_pcvm"] = ci.get("pcvm", {})
         _log(f"CI status fetched for {len(seen_shas)} unique commit(s)")
 
+    # Fetch Jira ticket summaries for all rows (ticket key → description)
+    all_ticket_keys = set()
+    for row in all_rows:
+        for t in row.get("tickets_resolved", []):
+            key = t.split()[0].rstrip(" -:")
+            if re.match(r'^[A-Z]+-\d+$', key):
+                all_ticket_keys.add(key)
+        m = re.search(r'([A-Z]+-\d+)', row.get("main_ticket", ""))
+        if m:
+            all_ticket_keys.add(m.group(1))
+    ticket_summaries = {}
+    if all_ticket_keys:
+        _log(f"Fetching Jira summaries for {len(all_ticket_keys)} ticket(s)...")
+        ticket_summaries = fetch_ticket_summaries(list(all_ticket_keys))
+
+    # Embed ticket summaries into each row
+    for row in all_rows:
+        resolved_with_summary = []
+        for t in row.get("tickets_resolved", []):
+            key = t.split()[0].rstrip(" -:")
+            summary = ticket_summaries.get(key, "")
+            resolved_with_summary.append({
+                "key": key,
+                "summary": summary,
+            })
+        row["tickets_resolved_details"] = resolved_with_summary
+        m = re.search(r'([A-Z]+-\d+)', row.get("main_ticket", ""))
+        if m:
+            row["main_ticket_summary"] = ticket_summaries.get(m.group(1), "")
+
+    # Build prev_rows: maps type -> {version: prev_row}
+    ci_key_map = {"AOS": "ci_cvm", "PC": "ci_pcvm"}
+    prev_rows = {"AOS": {}, "PC": {}}
+    for rtype, ci_key in ci_key_map.items():
+        typed = [r for r in all_rows if r.get("type") == rtype]
+        for i in range(len(typed) - 1):
+            cur_ver = typed[i].get("goldimage_version", "")
+            prev_rows[rtype][cur_ver] = typed[i + 1]
+
+    # Resolve Jira merged dates for previous-release rows too
+    prev_row_list = []
+    for rtype_map in prev_rows.values():
+        for pr in rtype_map.values():
+            if pr not in prev_row_list:
+                prev_row_list.append(pr)
+    if prev_row_list:
+        _resolve_merge_dates_from_jira(prev_row_list, args.branch)
+
+    # Attach previous_release section with only PRs and CI builds
+    _prev_keep_keys = {
+        "goldimage_version", "type", "main_ticket",
+        "associated_prs", "release_pr_link",
+        "ci_cvm", "ci_pcvm",
+    }
+    for row in rows:
+        rtype = row.get("type", "AOS")
+        ver = row.get("goldimage_version", "")
+        prev = prev_rows.get(rtype, {}).get(ver)
+        if prev:
+            row["previous_release"] = {
+                k: v for k, v in prev.items()
+                if k in _prev_keep_keys
+            }
+        else:
+            row["previous_release"] = None
+
     # Download rpm.txt + old_rpm.txt from Artifactory if requested
     if args.download_rpm:
-        # Build prev_rows based on CI key availability, not row type.
-        # Combined releases (AOS+PC in one commit) produce AOS-type rows
-        # that also carry ci_pcvm data — these must count as PC sources.
-        ci_key_map = {"AOS": "ci_cvm", "PC": "ci_pcvm"}
-        prev_rows = {"AOS": {}, "PC": {}}
-        for rtype, ci_key in ci_key_map.items():
-            has_ci = [r for r in all_rows
-                      if _extract_build_number(
-                          r.get(ci_key, {}).get("url", ""))]
-            for i in range(len(has_ci) - 1):
-                cur_ver = has_ci[i].get("goldimage_version", "")
-                prev_rows[rtype][cur_ver] = has_ci[i + 1]
-
         downloaded = download_rpm_artifacts(rows, prev_rows, args.rpm_dir,
                                            args.filter)
         for d in downloaded:
@@ -2066,11 +2385,17 @@ Examples:
         total_skipped = sum(r.get("skipped", 0) for r in confluence_results)
         _log(f"Confluence upload complete: {total_added} added, {total_skipped} already exist")
 
-    # Output
+    # Always save JSON to releases/release_data.json (after ALL enrichment)
+    default_json_path = os.path.join(args.rpm_dir, "release_data.json")
+    os.makedirs(os.path.dirname(default_json_path), exist_ok=True)
+    format_json(rows, default_json_path)
+
+    # Output in requested format
     gh_date = args.with_github_date
     sg_date = args.with_sg_date
     if args.format == "json":
-        format_json(rows, args.output)
+        if args.output and args.output != default_json_path:
+            format_json(rows, args.output)
     elif args.format == "markdown":
         format_markdown(rows, args.validate_urls, with_github_date=gh_date, with_sg_date=sg_date)
     else:

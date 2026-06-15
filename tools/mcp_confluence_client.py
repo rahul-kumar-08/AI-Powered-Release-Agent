@@ -4,9 +4,11 @@ MCP Confluence Client — Uploads release table data to Confluence via
 the Atlassian MCP server configured in .cursor/rules/mcp.json.
 
 Features:
-  - Auto page routing: finds or creates child pages under CONFLUENCE_PAGE_ID
-    by branch + release type (AOS/PC)
-  - Deduplication: reads existing table rows, only adds new ones
+  - Dual parent pages: AOS_CONFLUENCE_PAGE_ID / PC_CONFLUENCE_PAGE_ID
+  - Smart page routing: recursively discovers descendant pages and matches
+    by branch version + RHEL version (e.g. "Master-el9", "Modern STS - 7.6",
+    "PC.7.6", "Master-RHEL9.6")
+  - Deduplication: reads existing table rows, skips versions already present
   - Sorted rebuild: all rows sorted by merge date (newest first)
   - Supports both markdown and storage-format output
 
@@ -24,7 +26,9 @@ Usage:
   python3 tools/mcp_confluence_client.py --input-json /tmp/releases.json --branch master --force-rebuild
 
 Environment (from tools/.env):
-  CONFLUENCE_PAGE_ID  — Parent page ID (child pages auto-resolved per branch/type)
+  AOS_CONFLUENCE_PAGE_ID — Parent page ID for AOS releases
+  PC_CONFLUENCE_PAGE_ID  — Parent page ID for PC releases
+  CONFLUENCE_PAGE_ID     — Fallback parent page ID (used if type-specific ID not set)
 """
 
 import json
@@ -96,7 +100,13 @@ def get_page_content(server_key, page_id):
             return content.get("value", "")
         return str(content)
     except (json.JSONDecodeError, AttributeError):
-        return text
+        pass
+    # PII filters may break JSON; extract content.value via regex
+    m = re.search(r'"value"\s*:\s*"(.*?)"\s*[,}]', text, re.DOTALL)
+    if m:
+        raw = m.group(1)
+        return raw.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
+    return text
 
 
 def create_page(server_key, space_key, title, content, parent_id):
@@ -161,25 +171,149 @@ def get_space_key(server_key, page_id):
     return m.group(1) if m else ""
 
 
-def find_or_create_child_page(server_key, parent_id, branch, release_type, space_key=None):
+def _collect_all_pages(server_key, parent_id, depth=0, max_depth=3):
+    """Recursively collect all descendant pages up to *max_depth* levels."""
+    if depth >= max_depth:
+        return []
+    children = get_child_pages(server_key, parent_id)
+    all_pages = []
+    for child in children:
+        child_id = str(child.get("id", ""))
+        all_pages.append(child)
+        if child_id:
+            all_pages.extend(
+                _collect_all_pages(server_key, child_id, depth + 1, max_depth))
+    return all_pages
+
+
+def _extract_branch_ver(branch):
+    """'ganges-7.6' → '7.6',  'master' → None."""
+    m = re.match(r"ganges-([\d.]+)", branch)
+    return m.group(1) if m else None
+
+
+def _extract_rhel_major(version_str):
+    """'main-master-rhel9.7-10.0.0' → '9'."""
+    m = re.search(r"rhel(\d+)", version_str)
+    return m.group(1) if m else None
+
+
+def find_target_page(server_key, parent_id, branch, release_type,
+                     rows=None, space_key=None):
+    """Find the correct child/descendant page for a set of release rows.
+
+    Page hierarchy follows the existing Confluence structure:
+      AOS: Master-el9, Modern STS - 7.6, STS/Modern STS - 7.5, …
+      PC:  EL9/Master-RHEL9.6, EL8/PC.7.5, PC.7.6, …
+
+    Matches pages by branch name and RHEL version extracted from the
+    goldimage version string.  Falls back to creating a new page under
+    the most appropriate parent if no match is found.
+    """
     if not space_key:
         space_key = get_space_key(server_key, parent_id)
         _log(f"Resolved space key: {space_key}")
 
-    children = get_child_pages(server_key, parent_id)
-    target_title = f"{release_type} Release {branch}"
-    _log(f"Looking for child page: '{target_title}' under parent {parent_id}")
+    all_pages = _collect_all_pages(server_key, parent_id)
+    _log(f"Discovered {len(all_pages)} pages under parent {parent_id}")
 
-    for child in children:
-        title = child.get("title", "")
-        if branch.lower() in title.lower() and release_type.lower() in title.lower():
-            page_id = str(child.get("id", ""))
-            _log(f"Found existing page: '{title}' (id={page_id})")
-            return page_id, title
+    branch_ver = _extract_branch_ver(branch)
+    rhel_ver = None
+    if rows:
+        for row in rows:
+            rhel_ver = _extract_rhel_major(
+                row.get("goldimage_version", row.get("ver", "")))
+            if rhel_ver:
+                break
 
-    _log(f"No matching child page found, creating: '{target_title}'")
-    page_id = create_page(server_key, space_key, target_title, f"# {target_title}\n\n*(table pending)*", parent_id)
-    return page_id, target_title
+    rtype = release_type.upper()
+
+    # Build ordered list of candidate title patterns (exact match first).
+    patterns = _build_title_patterns(rtype, branch, branch_ver, rhel_ver)
+    _log(f"Matching patterns: {patterns}")
+
+    # Exact (case-insensitive) match
+    for pattern in patterns:
+        for page in all_pages:
+            if page.get("title", "").lower() == pattern.lower():
+                pid = str(page.get("id", ""))
+                _log(f"Matched page: '{page['title']}' (id={pid})")
+                return pid, page["title"]
+
+    # Fuzzy: branch version appears anywhere in title
+    if branch_ver:
+        for page in all_pages:
+            title_lower = page.get("title", "").lower()
+            if branch_ver in title_lower:
+                pid = str(page.get("id", ""))
+                _log(f"Fuzzy-matched page: '{page['title']}' (id={pid})")
+                return pid, page["title"]
+
+    # No match — create under the best parent
+    new_title = _new_page_title(rtype, branch, branch_ver, rhel_ver)
+    create_parent = _best_create_parent(
+        rtype, branch, rhel_ver, parent_id, all_pages)
+    _log(f"No match found, creating '{new_title}' under {create_parent}")
+    pid = create_page(server_key, space_key, new_title,
+                      f"# {new_title}\n\n*(table pending)*", create_parent)
+    return pid, new_title
+
+
+def _build_title_patterns(rtype, branch, branch_ver, rhel_ver):
+    """Return an ordered list of candidate page titles to match against."""
+    patterns = []
+    if rtype == "AOS":
+        if branch == "master":
+            if rhel_ver:
+                patterns.append(f"Master-el{rhel_ver}")
+            patterns.extend(["Master-el9", "Master-el8", "Master"])
+        elif branch_ver:
+            patterns.append(f"Modern STS - {branch_ver}")
+    else:  # PC
+        if branch == "master":
+            if rhel_ver:
+                # e.g. "Master-RHEL9.6", "Master-RHEL9"
+                patterns.append(f"Master-RHEL{rhel_ver}")
+                for minor in range(10, -1, -1):
+                    patterns.append(f"Master-RHEL{rhel_ver}.{minor}")
+            patterns.append("Master - PC")
+        elif branch_ver:
+            patterns.append(f"PC.{branch_ver}")
+            patterns.append(f"pc.{branch_ver}")
+    return patterns
+
+
+def _new_page_title(rtype, branch, branch_ver, rhel_ver):
+    if rtype == "AOS":
+        if branch == "master":
+            return f"Master-el{rhel_ver or '9'}"
+        return f"Modern STS - {branch_ver}" if branch_ver else f"AOS {branch}"
+    else:
+        if branch == "master":
+            return f"Master-RHEL{rhel_ver or '9'}"
+        return f"PC.{branch_ver}" if branch_ver else f"PC {branch}"
+
+
+def _best_create_parent(rtype, branch, rhel_ver, root_parent, all_pages):
+    """Choose the best parent page for a newly created child."""
+    if rtype == "AOS":
+        if branch == "master":
+            for p in all_pages:
+                if p.get("title", "").lower() == "master":
+                    return str(p["id"])
+        else:
+            for p in all_pages:
+                if p.get("title", "").lower() == "sts":
+                    return str(p["id"])
+    else:  # PC
+        if rhel_ver:
+            for p in all_pages:
+                if p.get("title", "").lower() == f"el{rhel_ver}":
+                    return str(p["id"])
+        for p in all_pages:
+            if p.get("title", "").lower() in ("el9", "el8"):
+                return str(p["id"])
+    return root_parent
 
 
 # ---------------------------------------------------------------------------
@@ -194,13 +328,15 @@ TABLE_COLUMNS = [
 def _normalize_version(ver):
     """Normalize a version string for dedup comparison.
 
-    Strips ``(AOS)``/``(PC)`` suffixes, extra whitespace, and lowercases
-    so that ``sts-ganges-7.5-rhel8.10-5.10.237-8.0.0 (AOS)`` matches
-    ``sts-ganges-7.5-rhel8.10-5.10.237-8.0.0``.
+    Strips ``(AOS)``/``(PC)`` suffixes, markdown backticks, extra
+    whitespace, and lowercases so that variations like
+    ````` main-master-rhel9.7-10.0.0 ````` and
+    ``main-master-rhel9.7-10.0.0 (AOS)`` all match.
     """
     if not ver:
         return ""
     ver = re.sub(r"\s*\((AOS|PC)\)\s*$", "", ver, flags=re.IGNORECASE)
+    ver = ver.replace("`", "")
     return ver.strip().lower()
 
 
@@ -275,9 +411,6 @@ def row_to_cells(row):
     rpm_url = row.get("rpm_url", row.get("rpm", ""))
     merge_date = row.get("merge_date", row.get("date", "N/A"))
     notes = row.get("notes", "")
-    rtype = row.get("type", "")
-    if rtype:
-        ver = f"{ver} ({rtype})"
 
     cl_cell = cl_url if cl_url and "not found" not in cl_url.lower() else "Data not found"
     rpm_cell = rpm_url if rpm_url and "not found" not in rpm_url.lower() else "Data not found"
@@ -349,11 +482,13 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
     """Upload release rows to Confluence in append mode.
 
     Workflow:
-      1. Read existing page content and extract table rows.
-      2. Deduplicate: skip any new row whose normalized version already exists.
-      3. Append new rows to existing rows.
-      4. Sort ALL rows by merge date (newest first) and rebuild the table.
-      5. Update the page only if new rows were added (or force_rebuild).
+      1. Find the correct target page by matching branch name and RHEL
+         version against the existing page hierarchy under *parent_id*.
+      2. Read existing page content and extract table rows.
+      3. Deduplicate: skip any new row whose normalized version already exists.
+      4. Append new rows to existing rows.
+      5. Sort ALL rows by merge date (newest first) and rebuild the table.
+      6. Update the page only if new rows were added (or force_rebuild).
     """
     if not rows:
         _log("No rows to upload.")
@@ -364,8 +499,9 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
     release_type = release_type.upper()
     _log(f"Release type: {release_type}, branch: {branch}, incoming rows: {len(rows)}")
 
-    page_id, page_title = find_or_create_child_page(
-        server_key, parent_id, branch, release_type, space_key)
+    page_id, page_title = find_target_page(
+        server_key, parent_id, branch, release_type,
+        rows=rows, space_key=space_key)
     if not page_id:
         raise RuntimeError("Failed to find or create target page")
 

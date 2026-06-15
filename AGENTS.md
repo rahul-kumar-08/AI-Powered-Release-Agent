@@ -114,7 +114,9 @@ Usage: `python3.14 agent_runner.py "Extract last 5 releases from master and upda
 | `GITHUB_TOKEN` | GitHub PAT with repo read access |
 | `CONFLUENCE_BASE_URL` | Confluence server URL |
 | `CONFLUENCE_API_TOKEN` | Confluence API token or PAT |
-| `CONFLUENCE_PAGE_ID` | **Parent page ID** — child pages auto-resolved per branch/type |
+| `AOS_CONFLUENCE_PAGE_ID` | Parent page ID for AOS releases (child pages per branch) |
+| `PC_CONFLUENCE_PAGE_ID` | Parent page ID for PC releases (child pages per branch) |
+| `CONFLUENCE_PAGE_ID` | Fallback parent page ID (used if type-specific IDs not set) |
 | `SOURCEGRAPH_TOKEN` | Sourcegraph access token for Gerrit merge validation |
 | `JIRA_BASE_URL` | Jira server URL |
 | `JIRA_API_TOKEN` | Jira personal access token (Bearer) |
@@ -153,7 +155,7 @@ Usage: `python3.14 agent_runner.py "Extract last 5 releases from master and upda
 - Only releases whose Jira Main Ticket (Epic) is in **Closed** status are included in output tables and Confluence updates. Non-Closed tickets are filtered out.
 - Confluence tables are deduplicated by GoldImage version; rows are sorted newest-first.
 - Invalid changelog/RPM URLs are shown as "Data not found" (validated via HEAD requests).
-- `CONFLUENCE_PAGE_ID` is a parent page; child pages are auto-discovered/created per branch + type.
+- `AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` are separate parent pages for each release type; child pages are auto-discovered/created per branch. Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set.
 - All timestamps are UTC, sourced from Gerrit commit dates via Sourcegraph.
 
 ## Agent Guidelines

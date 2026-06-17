@@ -4,184 +4,188 @@ An AI-driven automation tool that extracts GoldImage release PR data from the `n
 
 ## Overview
 
-This project provides an end-to-end pipeline for tracking GoldImage releases:
+The pipeline runs end-to-end in a single command:
 
-1. **Extract** — Fetch merged release PRs from GitHub, with revert detection and AOS/PC classification.
-2. **Validate** — Confirm CR merge status on Gerrit (`nugerrit.ntnxdpro.com/main`) via Sourcegraph. GitHub PR merge does NOT mean the CR is merged.
-3. **Enrich** — Look up Epic tickets in Jira, resolve Gerrit branches from fix versions, and generate Endor URLs for changelogs and RPM lists.
-4. **Publish** — Update Confluence with a deduplicated, date-sorted release table. Pages are auto-routed by branch and release type (AOS/PC).
-
-The agent operates in three modes:
-
-- **Fast-path (primary)** — `tools/release_query.py` runs GitHub + Sourcegraph + Jira lookups concurrently (~5x faster).
-- **MCP mode (fallback)** — Uses GitHub, Atlassian, and Sourcegraph MCP servers from the Cursor IDE.
-- **Script mode (last resort)** — CLI scripts for batch processing.
+1. **Extract** — Fetch release commits from Sourcegraph (Gerrit) and GitHub, with revert detection and AOS/PC classification.
+2. **Parse** — Build release rows from commit headings (source of truth for GoldImage version).
+3. **Jira Filter** — Resolve merge dates from git-tracker comments, filter by EPIC status (Closed only).
+4. **CI Status** — Fetch postmerge CircleCI status from GitHub.
+5. **Download RPM** — Download rpm.txt artifacts from Artifactory.
+6. **Generate Changelog** — Produce changelog.txt from template with RPM diff.
+7. **SFTP Upload** — Upload changelog and RPM files to hoth.
+8. **Endor Publish** — Trigger Jenkins PUBLISH_GOLD_IMAGE to push files to endor-cache-2.
+9. **Confluence Upload** — Update release table on Confluence (auto-routed by branch + AOS/PC type).
 
 ## Project Structure
 
 ```
 AI-Powered-Release-Agent/
-├── AGENTS.md                        # Agent identity and guidelines
-├── README.md
-├── agent_runner.py                  # Mission decomposition + tool dispatch (cursor-sdk)
+├── release_query.py              # Main pipeline entry point (run from root)
+├── agent_runner.py               # Mission decomposition + tool dispatch (cursor-sdk)
+├── src/                          # Pipeline stage modules
+│   ├── config.py                 # Shared constants, _log(), MCP wrapper
+│   ├── extract.py                # Sourcegraph + GitHub data fetching
+│   ├── jira_client.py            # Jira EPIC resolution, status filtering, git-tracker
+│   ├── version.py                # Version parsing, validation, row building
+│   ├── artifactory.py            # RPM download from Artifactory
+│   ├── changelog.py              # Changelog generation from template
+│   ├── sftp.py                   # SFTP upload to hoth
+│   ├── endor.py                  # Jenkins publish to endor + URL rewrite
+│   ├── confluence.py             # Confluence table upload
+│   └── formatter.py              # Output formatting (table/json/markdown)
+├── tools/                        # MCP client modules
+│   ├── .env                      # Secrets (DO NOT commit)
+│   ├── mcp_client.py             # Shared MCP client (fastmcp wrapper)
+│   ├── mcp_github_client.py      # GitHub MCP + REST API (commit details, CI status)
+│   ├── mcp_sourcegraph_client.py # Sourcegraph MCP (commit search)
+│   ├── mcp_confluence_client.py  # Confluence MCP (auto page routing)
+│   ├── mcp_ticket_validator.py   # Ticket validation via Sourcegraph
+│   └── jenkins_tool.py           # Jenkins PUBLISH_GOLD_IMAGE trigger
+├── steps/                        # Pre-built step files for zero-LLM-cost runs
+│   ├── master-full.json          # Full pipeline: master, 5 releases
+│   ├── master-view.json          # View-only: master, no uploads
+│   ├── ganges-7.6-full.json      # Full pipeline: ganges-7.6
+│   └── ...
+├── templates/
+│   └── changelog.template        # Changelog template for generation
 ├── .cursor/rules/
-│   ├── mcp.json                     # MCP server configuration
-│   ├── release-agent.mdc            # Agent behavior rules
-│   ├── goldimage-table-format.mdc   # Output format rules
-│   └── confluence-release-update-workflow.mdc  # Confluence update workflow
-└── tools/
-    ├── .env                         # Secrets (DO NOT commit)
-    ├── exceptions.py                # Typed exception hierarchy
-    ├── release_query.py             # Fast-path: concurrent GitHub+SG+Jira pipeline (preferred)
-    ├── github_tool.py               # GitHub release extraction via REST API
-    ├── sourcegraph_tool.py          # Sourcegraph/Gerrit merge validation
-    ├── jira_tool.py                 # Jira Epic ticket search
-    └── confluence_tool.py           # Confluence table updater with auto page routing
+│   ├── mcp.json                  # MCP server configuration
+│   ├── release-agent.mdc         # Agent guardrails + request routing
+│   ├── goldimage-table-format.mdc    # Output table format spec (on-demand)
+│   ├── confluence-release-update-workflow.mdc  # Confluence workflow (on-demand)
+│   └── release-version-mismatch-detection.mdc  # Version mismatch detection (on-demand)
+├── AGENTS.md                     # Agent identity, architecture, conventions
+├── requirements.txt
+└── releases/                     # Downloaded RPM/changelog artifacts (gitignored)
 ```
 
 ## Prerequisites
 
-- **Python 3.6+** (stdlib only — no external packages required for tools)
-- **Python 3.10+** with `cursor-sdk` for `agent_runner.py`
+- **Python 3.10+** (3.14 recommended) with `fastmcp`, `cursor-sdk`, `paramiko`
 - Access tokens for GitHub, Jira, Confluence, and Sourcegraph (see [Configuration](#configuration))
 
 ## Configuration
 
-Create a `tools/.env` file with the following variables:
+Create a `tools/.env` file:
 
 ```bash
 # GitHub
-GITHUB_TOKEN=ghp_...              # PAT with repo read access
+GITHUB_TOKEN=ghp_...
+
+# Sourcegraph
+SOURCEGRAPH_TOKEN=...
 
 # Jira
 JIRA_BASE_URL=https://jira.example.com
-JIRA_API_TOKEN=...                # Personal access token (Bearer)
+JIRA_API_TOKEN=...
 
 # Confluence
 CONFLUENCE_BASE_URL=https://confluence.example.com
-CONFLUENCE_API_TOKEN=...          # API token or PAT (Bearer)
-AOS_CONFLUENCE_PAGE_ID=123456     # Parent page ID for AOS releases
-PC_CONFLUENCE_PAGE_ID=789012      # Parent page ID for PC releases
-CONFLUENCE_PAGE_ID=123456         # Fallback parent page ID (used if type-specific IDs not set)
+CONFLUENCE_API_TOKEN=...
+AOS_CONFLUENCE_PAGE_ID=123456     # Parent page for AOS releases
+PC_CONFLUENCE_PAGE_ID=789012      # Parent page for PC releases
+CONFLUENCE_PAGE_ID=123456         # Fallback parent page
 
-# Sourcegraph
-SOURCEGRAPH_TOKEN=...             # Sourcegraph access token for Gerrit merge validation
+# Artifactory (for RPM downloads)
+ARTIFACTORY_BASE=...
+ARTIFACTORY_API_STORAGE=...
+
+# SFTP (for changelog/rpm upload)
+SFTP_HOST=upload.hoth.corp.nutanix.com
+SFTP_USERNAME=...
+SFTP_PASSWORD=...
+SFTP_REMOTE_PATH=...
+
+# Jenkins (for endor publish)
+JENKINS_URL=...
+JENKINS_USER=...
+JENKINS_TOKEN=...
 ```
-
-> **Note:** `AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` are separate parent pages for AOS and PC releases respectively. The tool automatically discovers or creates child pages per branch under the appropriate parent. Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set.
 
 > **Warning:** Never commit `tools/.env`. It is excluded via `.gitignore`.
 
 ## Usage
 
-### Fast-path: `release_query.py` (preferred)
+### Full pipeline: `release_query.py`
 
 ```bash
-# Last 5 AOS releases from master
-python3 tools/release_query.py --branch master --count 5 --filter aos
+# Last 5 releases from master (full pipeline: extract → upload → confluence)
+python3 release_query.py --branch master --count 5
 
-# Last 10 PC releases from ganges-7.5 with Gerrit merge date
-python3 tools/release_query.py --branch ganges-7.5 --count 10 --filter pc --with-sg-date
+# PC-only from ganges-7.6
+python3 release_query.py --branch ganges-7.6 --count 5 --filter pc
 
-# Compare GitHub and Gerrit merge dates
-python3 tools/release_query.py --branch master --count 5 --with-sg-date --with-github-date
+# View-only (skip uploads)
+python3 release_query.py --branch master --count 5 --no-upload-sftp --no-publish-endor --no-upload-confluence
 
-# JSON output for Confluence update
-python3 tools/release_query.py --branch master --count 15 --filter aos --format json --output /tmp/releases.json --no-cache
+# JSON output
+python3 release_query.py --branch master --count 3 --format json --output /tmp/releases.json
 ```
 
-### Confluence update: `confluence_tool.py`
-
-```bash
-# Auto-detects type (AOS/PC) from JSON, auto-routes to correct child page
-python3 tools/confluence_tool.py --input-json /tmp/releases.json --branch master
-
-# Explicit type override
-python3 tools/confluence_tool.py --input-json /tmp/releases.json --branch ganges-7.5 --type PC
-
-# Rebuild existing table (re-sort, re-validate URLs)
-python3 tools/confluence_tool.py --input-json /tmp/releases.json --branch master --type AOS --force-rebuild
-
-# Preview without writing
-python3 tools/confluence_tool.py --input-json /tmp/releases.json --branch master --dry-run
-```
+Key flags: `--branch`, `--count N`, `--filter all|aos|pc`, `--format table|json|markdown`, `--output <path>`, `--with-sg-date`, `--with-github-date`, `--no-ci-status`, `--no-upload-sftp`, `--no-publish-endor`, `--no-upload-confluence`, `--force-publish-endor`, `--force-rebuild-confluence`, `--validate-urls`.
 
 ### Agent runner: `agent_runner.py`
 
 ```bash
-# Natural language mission decomposition via Cursor SDK
-python3.14 agent_runner.py "Extract last 5 releases from master"
-python3.14 agent_runner.py "Extract releases from ganges-7.5, find jira epics, update confluence"
-python3.14 agent_runner.py --dry-run "Full pipeline for master last 10"
+# Natural language mission (uses Cursor SDK for decomposition)
+python3 agent_runner.py "Extract last 5 releases from master"
+
+# Pre-built steps (zero LLM token cost)
+python3 agent_runner.py --steps-json steps/master-full.json "master pipeline"
+python3 agent_runner.py --steps-json steps/ganges-7.6-pc-full.json "ganges-7.6 PC"
+
+# Dry run
+python3 agent_runner.py --dry-run "Full pipeline for ganges-7.5"
 ```
 
-## Components
+### Pre-built step files (`steps/`)
 
-### `tools/release_query.py`
+For routine pipeline runs with zero LLM token cost:
 
-**Primary tool.** Runs GitHub + Sourcegraph/Gerrit + Jira lookups concurrently using `ThreadPoolExecutor`. Includes file-based cache (5 min TTL). Handles:
-- Revert detection (version-based timeline analysis)
-- AOS/PC classification (splits on `/PC:` or detects `ganges-pc.` in version)
-- Gerrit branch resolution from EPIC fix versions
-- Git tracker fallback (parses `===git tracker===` comments from Jira EPICs)
-- Endor URL construction for changelogs and RPM lists
+| File | Description |
+|---|---|
+| `master-full.json` | Full pipeline: master, 5 releases |
+| `master-view.json` | View-only: master, no uploads |
+| `ganges-7.5-full.json` | Full pipeline: ganges-7.5 |
+| `ganges-7.5-view.json` | View-only: ganges-7.5 |
+| `ganges-7.6-full.json` | Full pipeline: ganges-7.6 |
+| `ganges-7.6-view.json` | View-only: ganges-7.6 |
+| `ganges-7.6-pc-full.json` | Full pipeline: ganges-7.6 PC only |
+| `ganges-7.6-latest-full.json` | Full pipeline: ganges-7.6, latest 1 |
 
-### `tools/confluence_tool.py`
+### Confluence update
 
-Confluence table updater with automatic page routing:
-- Uses `AOS_CONFLUENCE_PAGE_ID` / `PC_CONFLUENCE_PAGE_ID` as separate parent pages, discovers/creates child pages per branch
-- Validates changelog and RPM URLs (parallel HEAD checks), shows "Data not found" for invalid links
-- Rebuilds entire table sorted by merge date (newest first) when adding rows
-- `--force-rebuild` rebuilds the table from JSON even when no new rows to add
-- `--type AOS|PC` overrides auto-detection from JSON data
-- Deduplicates by GoldImage version
+The pipeline uploads to Confluence automatically. For standalone updates:
 
-### `tools/github_tool.py`
-
-GitHub release extraction via REST API. Fetches release PRs, associated PRs, and CI status with retry and exponential backoff.
-
-### `tools/sourcegraph_tool.py`
-
-Validates release CR merge status by querying the Gerrit repo (`nugerrit.ntnxdpro.com/main`) via Sourcegraph's streaming API. Splits combined AOS/PC titles and validates each independently. Detects reverted releases.
-
-### `tools/jira_tool.py`
-
-Jira Epic ticket search. Reads release JSON, extracts AOS versions, and queries Jira REST API for matching Epics. Generates Endor URLs and enriched summary tables.
-
-### `tools/exceptions.py`
-
-Typed exception hierarchy used by all tools. The orchestrator inspects exception types to decide retry behavior: `ToolError` (base), `AuthError`, `ConfigError`, `RateLimitError`, `HttpError`, `NetworkError`, `NotFoundError`, `DataError`.
-
-### `agent_runner.py`
-
-Mission decomposition and tool dispatch. Uses `cursor-sdk` to decompose natural language missions into ordered tool steps, then executes each with retry logic.
+```bash
+python3 tools/mcp_confluence_client.py --input-json /tmp/releases.json --branch master
+python3 tools/mcp_confluence_client.py --input-json /tmp/releases.json --branch ganges-7.5 --type PC --force-rebuild
+```
 
 ## Confluence Auto Page Routing
 
 The tool automatically manages Confluence pages:
 
-1. `AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` in `tools/.env` point to **separate parent pages** for each release type
-2. When updating, the tool routes AOS releases to the AOS parent and PC releases to the PC parent
-3. Under each parent, child pages are matched by branch name + release type in the title
-4. If no matching child exists, a new page is created (e.g. "PC Release ganges-7.3")
-5. Existing entries are checked by GoldImage version to avoid duplication
-6. Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set
+1. `AOS_CONFLUENCE_PAGE_ID` / `PC_CONFLUENCE_PAGE_ID` point to separate parent pages per release type
+2. Child pages are matched by branch name + release type in the title
+3. New child pages are created if no match exists (e.g. "PC Release ganges-7.3")
+4. Entries are deduplicated by GoldImage version, sorted newest-first
+5. Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set
 
-## Confluence Table Format
+## Output Format
 
-| GoldImage Version | Main Tickets | Change Log | RPM List | Merge Date | Notes |
+| GoldImage Version | Main Ticket | Change Log | RPM List | Merge Date | Notes |
 |---|---|---|---|---|---|
-| `main-master-rhel9.7-5.14.0-9.2.0 (AOS)` | ENG-928113 | [changelog] | [rpm] | 23-May-2026 | — |
+| `main-master-rhel9.8-9.0.0` | ENG-941559 | [changelog] | [rpm] | 30-May-2026 | master |
 
-- Releases are sorted newest-first
-- Invalid changelog/RPM URLs show "Data not found"
+- Merge Date is the **Gerrit CR date** (not GitHub PR date)
 - Combined AOS/PC releases produce separate rows
-- Merge Date is the Gerrit CR date (not GitHub PR date)
-- Notes column shows the Gerrit stable branch for non-master releases
+- Only releases with Closed Jira EPIC status are included
+- Invalid URLs show "Data not found"
 
 ## MCP Integration
 
-When used inside the Cursor IDE, the agent leverages MCP servers for interactive queries:
+When used inside the Cursor IDE, the agent leverages MCP servers:
 
 - **GitHub MCP** — Search and inspect PRs, issues, and repositories
 - **Atlassian MCP** — Query Jira tickets and update Confluence pages

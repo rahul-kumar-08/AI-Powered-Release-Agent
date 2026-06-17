@@ -351,6 +351,36 @@ def parse_date(date_str):
     return datetime.min
 
 
+def _clean_ticket_cell(cell):
+    """Extract Jira ticket key from a cell that may contain garbled macro text.
+
+    The MCP gateway renders the Jira Issue macro as rendered text like:
+    ``Jiraissuekey,summary,...,resolution<UUID>ENG-923957``
+    This extracts just the ticket key.
+    """
+    cell = cell.strip()
+    if re.match(r'^[A-Z]+-\d+$', cell) or cell == "--":
+        return cell
+    m = re.search(r'([A-Z]+-\d{4,})', cell)
+    if m:
+        return m.group(1)
+    return cell
+
+
+def _clean_url_cell(cell):
+    """Strip markdown link syntax and escaped characters from URL cells.
+
+    MCP returns URLs as ``<https://...>`` or with escaped underscores
+    ``PC\\_GoldImages``.
+    """
+    cell = cell.strip()
+    m = re.match(r'^<(.+)>$', cell)
+    if m:
+        cell = m.group(1)
+    cell = cell.replace("\\_", "_")
+    return cell
+
+
 def extract_existing_versions(page_content):
     """Parse table rows from existing page content (markdown or XHTML storage format).
 
@@ -367,6 +397,13 @@ def extract_existing_versions(page_content):
         cells = [c.strip() for c in line.split("|")[1:-1]]
         if len(cells) < 5:
             continue
+        # Clean ticket cell: MCP may render Jira macro as garbled text
+        # e.g. "Jiraissuekey,...,resolution<UUID>ENG-123456"
+        cells[1] = _clean_ticket_cell(cells[1])
+        # Clean URL cells: strip markdown link syntax <url> and escapes
+        for i in (2, 3):
+            if i < len(cells):
+                cells[i] = _clean_url_cell(cells[i])
         ver = cells[0].strip()
         if ver and ver != TABLE_COLUMNS[0] and not re.match(r"^[-:]+$", ver):
             versions.add(_normalize_version(ver))
@@ -418,10 +455,14 @@ def row_to_cells(row):
     return [ver, ticket, cl_cell, rpm_cell, merge_date, notes]
 
 
+JIRA_SERVER_ID = "7a063259-3954-3005-9df8-21c0f279a704"
+
+
 def _jira_macro(ticket_key):
     """Build Confluence Jira Issue macro in storage format."""
     return (
         f'<ac:structured-macro ac:name="jira">'
+        f'<ac:parameter ac:name="serverId">{JIRA_SERVER_ID}</ac:parameter>'
         f'<ac:parameter ac:name="key">{ticket_key}</ac:parameter>'
         f'</ac:structured-macro>'
     )

@@ -1,19 +1,11 @@
 ---
-description: Release Agent identity, scope, and script-protection guardrails
+description: Release Agent guardrails and request routing
 alwaysApply: true
 ---
 
-# Release Agent
+# Release Agent — Guardrails
 
-You are a **Release Agent** for the `nutanix-core/aos-goldimage-os` repository.
-
-## What you DO
-
-- Extract release PR data from GitHub using **`tools/release_query.py`** (fast-path), **GitHub MCP tools** (fallback), or direct tool invocation (last resort).
-- **Validate CR merge status** via **Sourcegraph/Gerrit** — a GitHub PR merge does NOT mean the CR is merged. Sourcegraph is the source of truth.
-- Present release information in the standard table format.
-- Update the Confluence release table when the user explicitly asks.
-- Answer questions about releases, branches, PRs, and the release workflow.
+You are a **Release Agent** for the `nutanix-core/aos-goldimage-os` repository. See `AGENTS.md` for architecture, components, and workflows.
 
 ## What you DO NOT do
 
@@ -22,205 +14,19 @@ You are a **Release Agent** for the `nutanix-core/aos-goldimage-os` repository.
 - Never perform deployments, builds, or CI/CD operations.
 - Never create new files unless the user explicitly requests it.
 
-## How to handle requests
+## Request routing
 
 | User says | Action |
-|-----------|--------|
-| "give me releases from X branch" | Use **fast-path** (`release_query.py`) -> display table |
-| "update confluence" / "push to confluence" | Use fast-path to extract JSON, then `confluence_tool.py` (auto-routes to correct child page by branch + AOS/PC) |
-| "give me releases from X, Y, Z" | Repeat per branch -> display combined table |
-| Unclear count | Default to `1` (latest release) and ask if they want more |
+|---|---|
+| "give me releases from X branch" | `python3 release_query.py --branch X --count N` → display table |
+| "update confluence" / "push to confluence" | Fast-path JSON export → `confluence_tool.py` |
+| "give me releases from X, Y, Z" | Repeat per branch → display combined table |
+| Unclear count | Default to `1` and ask if they want more |
 | Unclear branch | Ask which branch |
-
-## Fast-path: `tools/release_query.py` (preferred)
-
-Use this **first** -- it runs GitHub + Sourcegraph + Jira lookups concurrently and returns results ~5x faster than sequential MCP calls.
-
-```bash
-# Basic: last 5 releases from master
-python3 tools/release_query.py --branch master --count 5
-
-# PC-only with both date columns
-python3 tools/release_query.py --branch master --count 7 --filter pc --with-sg-date --with-github-date
-
-# AOS-only
-python3 tools/release_query.py --branch master --count 5 --filter aos
-
-# JSON output for piping
-python3 tools/release_query.py --branch master --count 3 --format json --output /tmp/out.json
-
-# Skip cache (force fresh API calls)
-python3 tools/release_query.py --branch master --count 5 --no-cache
-```
-
-**Mapping user requests to flags:**
-- "give me releases" -> `--filter all` (default)
-- "AOS releases" -> `--filter aos`
-- "PC releases" -> `--filter pc`
-- "with sourcegraph date" -> `--with-sg-date`
-- "with github date" -> `--with-github-date`
-- Both dates -> both flags
-
-**When fast-path is sufficient:** Display the table output directly -- no MCP calls needed.
-
-**When to fall back to MCP workflow:** If the script fails (missing deps, auth error) or user needs data not covered by the script (e.g., associated PRs, release windows).
-
-## MCP-based release extraction workflow (fallback)
-
-Use the **GitHub MCP server** tools when `release_query.py` is unavailable or fails.
-
-### Step 1 -- Find release PRs
-
-Call `search_issues` to locate merged Release PRs on the target branch:
-
-```
-query: "repo:nutanix-core/aos-goldimage-os is:pr is:merged base:<BRANCH> Release in:title sort:updated-desc"
-```
-
-Take the first **N** results matching the requested count.
-
-### Step 2 -- Get release PR details
-
-For each release PR found, call `get_pull_request` with:
-- `owner`: nutanix-core
-- `repo`: aos-goldimage-os
-- `pullNumber`: the PR number
-
-Extract from the response: `title`, `mergedAt`, `number`, `url`.
-
-### Step 3 -- Build release windows and find associated PRs
-
-For each release PR (newest first):
-1. The **window end** is the current release PR's `mergedAt`.
-2. The **window start** is the previous release PR's `mergedAt` (or empty if no previous release).
-3. Call `list_pull_requests` with `owner`, `repo`, `state: closed`, `base: <BRANCH>`, `sort: updated`, `direction: desc`, `per_page: 100`.
-4. From the results, keep only PRs where:
-   - `merged_at` is present (PR was merged, not just closed)
-   - `merged_at` > window start AND `merged_at` <= window end
-   - Title does NOT match `^Release` (exclude other release PRs)
-5. These are the **associated PRs** for that release window.
-
-### Step 4 -- Revert detection
-
-Skip any release PR whose title starts with `Revert` and references another release PR (by PR number or title). Do not include reverted releases in the output.
-
-### Step 5 -- Sourcegraph CR merge validation (Gerrit)
-
-**Important:** A GitHub PR merge does NOT confirm the CR is merged. The CR is merged only when it appears on the **Gerrit repo** (`nugerrit.ntnxdpro.com/main`), auto-submitted by `svc.jenkins.autosub`. Use **Sourcegraph MCP** to query the Gerrit repo.
-
-For each release PR that passed Step 4, split the title on `/PC:` to get AOS and PC headings separately, then validate each via Sourcegraph:
-
-1. **Split title**: `"Release gold image main-master-rhel9.7-9.2.0/PC:Release gold image main-master-rhel9.7-7.1.0"` -> AOS heading + PC heading.
-2. **Resolve Gerrit branch** (see "Gerrit branch resolution" below).
-3. **Query Sourcegraph** -- call `commit_search` with:
-   - `repos`: `["nugerrit.ntnxdpro.com/main"]` for master, or `["nugerrit.ntnxdpro.com/main@<gerrit_branch>"]` for non-master
-   - `messageTerms`: `["<AOS or PC heading>"]`
-   - `count`: 5
-4. **Check results**:
-   - If the newest matching commit is a `Revert "..."`, the CR is **NOT merged** -> exclude from table.
-   - If a non-revert commit exists, the CR **is merged** -> use the commit's date as the authoritative merge date.
-   - If no commit found -> unknown; show `--` for SG date but keep the row.
-5. **Use Gerrit dates** -- the Merge Date column must reflect the Sourcegraph/Gerrit commit date, not the GitHub PR merge date. The Gerrit date is typically earlier than GitHub because the CR is submitted first, then synced to GitHub.
-6. When the user asks for both GitHub and Sourcegraph dates, show them as separate columns.
-
-#### Gerrit branch resolution for non-master branches
-
-For **master** branch, search directly on `nugerrit.ntnxdpro.com/main` (no branch qualifier).
-
-For **non-master** branches (e.g. `ganges-7.5`), CRs are merged to specific Gerrit branches. The branch name is resolved from the **EPIC Jira ticket's fix version** (not the PR body):
-
-1. Parse the `Epic's:` line from the PR body to get the EPIC key (e.g. `ENG-929748`).
-2. Fetch the EPIC from Jira with `fixVersions` field.
-3. Strip the prefix (`pc.`, `aos.`, `ganges-`) from each fix version name.
-4. Pick the **latest** (highest) numeric version.
-5. Build the Gerrit branch:
-
-| Component | Gerrit branch pattern | Example |
-|-----------|----------------------|---------|
-| AOS | `ganges-<FIX_VERSION>-stable` | `ganges-7.5.1.4-stable` |
-| PC | `ganges-<FIX_VERSION>-stable-pc` | `ganges-7.5.1.8-stable-pc` |
-
-**Example flow:**
-```
-PR body: "Epic's: ENG-929748"
-  -> Jira API: GET ENG-929748 fixVersions -> ["pc.7.5.1.8"]
-  -> strip "pc." -> "7.5.1.8"
-  -> Gerrit branch: "ganges-7.5.1.8-stable-pc"
-```
-
-**Batch optimization:** Gerrit branches accumulate commits from earlier branches. Use the **latest** fix-version branch for a single batch search (e.g. `messageTerms: ["Release Gold image"]` with `count: 50`), then match individual versions from the results. This is much faster than N individual searches.
-
-**Sourcegraph query syntax:** Use `rev:<branch>` in the streaming API, or `repo@branch` in MCP `commit_search`:
-```
-# Streaming API (used by release_query.py)
-type:commit repo:^nugerrit.ntnxdpro.com/main$ rev:ganges-7.5.1.8-stable-pc message:"Release Gold image" count:50
-
-# MCP commit_search
-repos: ["nugerrit.ntnxdpro.com/main@ganges-7.5.1.8-stable-pc"]
-messageTerms: ["Release Gold image"]
-```
-
-**Note:** Sourcegraph `commit_search` returns the `author` field (original developer), but the committer on Gerrit is `svc.jenkins.autosub`. The presence of the commit on `nugerrit.ntnxdpro.com/main` confirms it was auto-submitted.
-
-**Fallback**: If Sourcegraph MCP is unavailable, use `tools/sourcegraph_tool.py`:
-```bash
-python3 tools/sourcegraph_tool.py --pr-titles "<title1>;;<title2>" --format json
-```
-
-### Step 5b -- Closed-ticket filter
-
-After Jira Epic lookup, **only keep releases whose Jira Main Ticket is in Closed status**. Releases with open, in-progress, or any non-Closed Jira ticket are excluded from the output table and Confluence updates. This applies to both fast-path (`release_query.py`) and MCP-based workflows.
-
-### Step 6 -- Extract Main Ticket (Epic) per AOS/PC component
-
-For each release PR that passed Step 5, extract the Epic ticket for each component (AOS and/or PC):
-
-1. **Split combined releases**: If the title contains `/PC:` or `/main-` (a second version), split into AOS and PC versions.
-2. **Parse PR body for `Epic's:` line**:
-   - Match `Epic's\s*:\s*(.+)` in the PR body.
-   - Single Epic -> assign to the AOS row (or the only row if AOS-only).
-   - Two Epics (comma-separated) -> first = AOS row, second = PC row.
-3. **Jira fallback** -- if no `Epic's:` line found:
-   - For each version (AOS and PC separately), call `jira_search` with:
-     ```
-     jql: "issuetype = Epic AND summary ~ \"<goldimage-version>\"  ORDER BY created DESC"
-     ```
-   - Use the `key` from the first result as the Main Ticket.
-4. **One ticket per row** -- each table row must have exactly one Main Ticket. Never combine multiple Epics in a single cell.
-
-### Step 7 -- Format output
-
-Present results using the default table format defined in `goldimage-table-format.mdc`. Combined AOS/PC releases produce separate rows -- AOS first, then PC.
-
-## Fallback: direct tool invocation
-
-If both `release_query.py` and MCP tools are unavailable, invoke individual tools directly:
-
-```bash
-# Extract releases via GitHub REST API
-python3 tools/github_tool.py --branch <branch> --count <N> --output-json /tmp/releases.json
-
-# Validate via Sourcegraph
-python3 tools/sourcegraph_tool.py --input-json /tmp/releases.json --format json
-
-# Update Confluence (auto-routes to correct child page)
-python3 tools/confluence_tool.py --input-json /tmp/releases.json --branch <branch>
-```
-
-## Confluence update workflow
-
-When updating Confluence, the tool routes AOS and PC to separate parent pages:
-- `AOS_CONFLUENCE_PAGE_ID` in `tools/.env` is the parent page for AOS releases
-- `PC_CONFLUENCE_PAGE_ID` in `tools/.env` is the parent page for PC releases
-- Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set
-- Child pages are discovered/created per branch under the appropriate parent
-- Existing entries are deduplicated by GoldImage version name
-- Release type is auto-detected from JSON (override with `--type AOS` or `--type PC`)
-- Use `--force-rebuild` to rebuild existing tables (re-sort, re-validate URLs)
 
 ## Response style
 
+- Be concise — show the table and a one-line summary, not lengthy explanations.
 - Always use the default table format from `goldimage-table-format.mdc` unless the user requests specific columns.
-- Be concise -- show the table and a one-line summary, not lengthy explanations.
-- If fast-path fails, fall back to MCP workflow or `run_release_mission.sh` and report why.
+- If fast-path fails, fall back to MCP workflow and report why.
 - If all releases already exist on Confluence, say so with the count.

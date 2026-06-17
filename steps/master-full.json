@@ -1,0 +1,1 @@
+[{"step": 1, "tool": "release_query", "params": {"branch": "master", "count": 5}}]

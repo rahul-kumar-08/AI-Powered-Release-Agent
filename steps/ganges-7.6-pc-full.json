@@ -1,0 +1,1 @@
+[{"step": 1, "tool": "release_query", "params": {"branch": "ganges-7.6", "count": 5, "filter": "pc"}}]

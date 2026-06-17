@@ -1,0 +1,1 @@
+[{"step": 1, "tool": "release_query", "params": {"branch": "ganges-7.5", "count": 5, "no_upload_sftp": true, "no_upload_confluence": true, "no_publish_endor": true}}]

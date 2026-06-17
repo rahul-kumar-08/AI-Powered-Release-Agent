@@ -1,68 +1,29 @@
 ---
-description: Automate Confluence release table update workflow on request
-alwaysApply: true
+description: Automate Confluence release table update workflow — read when user asks to update Confluence
+alwaysApply: false
 ---
 
 # Confluence Release Update Workflow
 
-When the user asks to "update Confluence page" for release details, perform this workflow end-to-end unless blocked by missing credentials/auth.
+When the user asks to "update Confluence page", run this end-to-end.
 
-## Preferred workflow: release_query.py → confluence_tool.py
+## Steps
 
-1. **Extract releases** using `release_query.py` with `--format json --output <path>`:
-   ```bash
-   python3 tools/release_query.py --branch <branch> --count <N> --filter <aos|pc> --format json --output /tmp/release_<type>_<branch>_<N>.json --no-cache
-   ```
-2. **Display the release table** to the user for confirmation.
-3. **Update Confluence** using `confluence_tool.py`:
-   ```bash
-   CONFLUENCE_BASE_URL="https://confluence.eng.nutanix.com:8443" \
-   CONFLUENCE_API_TOKEN="<token>" \
-   python3 tools/confluence_tool.py --input-json <json_path> --branch <branch>
-   ```
+1. **Extract:** `python3 release_query.py --branch <branch> --count <N> --filter <aos|pc> --format json --output /tmp/release_<type>_<branch>.json`
+2. **Display** the release table for user confirmation.
+3. **Upload:** `python3 tools/confluence_tool.py --input-json <json_path> --branch <branch>`
 
-### Automatic page routing
+Use `--force-rebuild` to rebuild existing tables (re-sort, re-validate URLs):
+`python3 tools/confluence_tool.py --input-json <path> --branch <branch> --force-rebuild`
 
-`AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` in `tools/.env` are **separate parent pages** for each release type. The tool automatically:
-- Routes AOS releases to `AOS_CONFLUENCE_PAGE_ID` and PC releases to `PC_CONFLUENCE_PAGE_ID`
-- Discovers child pages under the appropriate parent
-- Matches by branch name + release type (AOS/PC) in the page title
-- Creates a new child page (e.g. "PC Release ganges-7.3") if none exists
-- Checks existing entries by GoldImage version to avoid duplication
-- Falls back to `CONFLUENCE_PAGE_ID` if type-specific IDs are not set
-- Use `--type AOS` or `--type PC` to override auto-detection
+## Automatic page routing
 
-### Table management
+The tool auto-routes using `AOS_CONFLUENCE_PAGE_ID` / `PC_CONFLUENCE_PAGE_ID` from `tools/.env`. It discovers/creates child pages per branch, deduplicates by GoldImage version, and sorts newest-first. Use `--type AOS|PC` to override auto-detection. Falls back to `CONFLUENCE_PAGE_ID`.
 
-- **URL validation**: Changelog and RPM URLs are validated via parallel HEAD checks. Invalid links show "Data not found".
-- **Sorted rebuild**: When adding rows, the entire table is rebuilt with all rows sorted by merge date (newest first).
-- **Force rebuild**: Use `--force-rebuild` to rebuild the table from JSON even when no new rows need adding. This is useful to fix ordering or re-validate URLs on existing pages:
-  ```bash
-  python3 tools/confluence_tool.py --input-json <json_path> --branch <branch> --force-rebuild
-  ```
+## Credentials
 
-### Confluence credentials
+`CONFLUENCE_BASE_URL` and `CONFLUENCE_API_TOKEN` from `.cursor/rules/mcp.json`. Page IDs from `tools/.env`. Do NOT hardcode page IDs per branch.
 
-- `CONFLUENCE_BASE_URL` and `CONFLUENCE_API_TOKEN` come from the Atlassian MCP server config in `.cursor/rules/mcp.json`
-- `AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` (parent pages per type) are set in `tools/.env`
-- `CONFLUENCE_PAGE_ID` is the fallback parent page if type-specific IDs are not set
-- Do NOT hardcode page IDs per branch — the tool resolves child pages automatically
+## Report result
 
-## Fallback workflow
-
-Use `tools/run_goldimage_pipeline.sh` when `release_query.py` or `confluence_tool.py` are unavailable:
-```bash
-tools/run_goldimage_pipeline.sh pipeline <branch[,branch,...]> <count>
-```
-
-## Report result clearly
-
-- Added entries count/titles, or
-- "already exists" if no changes, or
-- exact blocker (auth/config) if update fails.
-
-## Defaults for this project
-
-- Release PR title filter: `^Release`
-- Prefer merged Release PRs only
-- Use the default table format from `goldimage-table-format.mdc`
+- Added entries count/titles, or "already exists" if no changes, or exact blocker if update fails.

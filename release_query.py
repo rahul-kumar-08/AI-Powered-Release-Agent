@@ -633,7 +633,7 @@ def search_jira_epic_full(version_raw, release_type):
 
 def _resolve_jira_token():
     """Resolve Jira token from env, .env, or mcp.json (in that order)."""
-    token = _get_env("JIRA_API_TOKEN")
+    token = _get_env("JIRA_TOKEN")
     if token:
         return token
     try:

@@ -180,3 +180,294 @@ async def _async_list_tools(url, headers):
     async with client:
         tools = await client.list_tools()
         return [{"name": t.name, "description": t.description or ""} for t in tools]
+
+
+# ---------------------------------------------------------------------------
+# MCP Token / Server Validation
+# ---------------------------------------------------------------------------
+
+import urllib.request
+import urllib.error
+
+
+def _validate_sourcegraph(headers):
+    """Validate Sourcegraph token via the streaming API.
+
+    Makes a minimal search that returns quickly to verify auth.
+    """
+    token = headers.get("Authorization", "")
+    if token.startswith("Bearer "):
+        token = token[7:]
+    if not token:
+        return False, "No Sourcegraph token configured"
+
+    sg_url = _get_env("SOURCEGRAPH_URL", "https://sourcegraph.ntnxdpro.com")
+    url = f"{sg_url}/.api/search/stream?q=type:repo+count:1"
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"token {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                return True, "OK"
+            return False, f"HTTP {resp.status}"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Token expired or invalid (401 Unauthorized)"
+        if e.code == 403:
+            return False, "Token lacks permissions (403 Forbidden)"
+        return False, f"HTTP {e.code}: {e.reason}"
+    except Exception as e:
+        return False, f"Connection failed: {e}"
+
+
+def _validate_github(headers):
+    """Validate GitHub PAT via the REST API ``/user`` endpoint."""
+    token = headers.get("Authorization", "")
+    if token.startswith("Bearer "):
+        token = token[7:]
+    env_token = _get_env("GITHUB_TOKEN")
+    token = env_token or token
+    if not token:
+        return False, "No GitHub token configured (set GITHUB_TOKEN in tools/.env or Authorization in mcp.json)"
+
+    req = urllib.request.Request("https://api.github.com/user", headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return True, "OK"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Token expired or invalid (401 Unauthorized)"
+        if e.code == 403:
+            body = ""
+            try:
+                body = e.read().decode()[:300]
+            except Exception:
+                pass
+            if "SAML" in body or "SSO" in body:
+                return False, ("Token valid but NOT authorized for organization SAML SSO. "
+                               "Go to https://github.com/settings/tokens → Configure SSO → "
+                               "Authorize for 'nutanix-core'")
+            return False, f"Token lacks permissions (403 Forbidden)"
+        return False, f"HTTP {e.code}: {e.reason}"
+    except Exception as e:
+        return False, f"Connection failed: {e}"
+
+
+def _validate_github_org_access(headers, org="nutanix-core"):
+    """Validate GitHub PAT has access to the target organization (SAML SSO check)."""
+    token = headers.get("Authorization", "")
+    if token.startswith("Bearer "):
+        token = token[7:]
+    env_token = _get_env("GITHUB_TOKEN")
+    token = env_token or token
+    if not token:
+        return False, "No token"
+
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{org}/aos-goldimage-os", headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return True, "OK"
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            body = ""
+            try:
+                body = e.read().decode()[:500]
+            except Exception:
+                pass
+            if "SAML" in body or "SSO" in body:
+                return False, (f"Token NOT authorized for '{org}' SAML SSO. "
+                               f"Visit https://github.com/orgs/{org}/sso to authorize your PAT")
+            return False, f"No access to {org} (403 Forbidden)"
+        if e.code == 404:
+            return False, f"Repository not found or no access (404)"
+        return False, f"HTTP {e.code}: {e.reason}"
+    except Exception as e:
+        return False, f"Connection failed: {e}"
+
+
+def _validate_jira(headers):
+    """Validate Jira token via the REST API ``/myself`` endpoint."""
+    token = (headers.get("X-Atlassian-Jira-Personal-Token")
+             or _get_env("JIRA_API_TOKEN"))
+    jira_url = (headers.get("X-Atlassian-Jira-Url")
+                or _get_env("JIRA_BASE_URL", "https://jira.nutanix.com"))
+    if not token:
+        return False, "No Jira token configured"
+
+    req = urllib.request.Request(f"{jira_url}/rest/api/2/myself", headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return True, "OK"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Jira token expired or invalid (401 Unauthorized)"
+        if e.code == 403:
+            return False, "Jira token lacks permissions (403 Forbidden)"
+        return False, f"HTTP {e.code}: {e.reason}"
+    except Exception as e:
+        return False, f"Connection failed: {e}"
+
+
+def _validate_confluence(headers):
+    """Validate Confluence token via a basic content API call."""
+    token = (headers.get("X-Atlassian-Confluence-Personal-Token")
+             or _get_env("CONFLUENCE_API_TOKEN"))
+    confluence_url = (headers.get("X-Atlassian-Confluence-Url")
+                      or _get_env("CONFLUENCE_BASE_URL"))
+    if not token or not confluence_url:
+        return False, "No Confluence token or URL configured"
+
+    confluence_url = confluence_url.rstrip("/")
+    req = urllib.request.Request(
+        f"{confluence_url}/rest/api/content?limit=1", headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return True, "OK"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Confluence token expired or invalid (401 Unauthorized)"
+        if e.code == 403:
+            return False, "Confluence token lacks permissions (403 Forbidden)"
+        return False, f"HTTP {e.code}: {e.reason}"
+    except Exception as e:
+        return False, f"Connection failed: {e}"
+
+
+def _validate_jenkins(headers=None):
+    """Validate Jenkins credentials via the ``/api/json`` endpoint."""
+    import base64
+    user = _get_env("JENKINS_USER")
+    token = _get_env("JENKINS_TOKEN")
+    base = _get_env("JENKINS_BASE")
+    if not user or not token:
+        return False, "JENKINS_USER / JENKINS_TOKEN not set in tools/.env"
+    if not base:
+        return False, "JENKINS_BASE not set in tools/.env"
+
+    creds = base64.b64encode(f"{user}:{token}".encode()).decode()
+    req = urllib.request.Request(
+        f"{base.rstrip('/')}/api/json?tree=mode", headers={
+            "Authorization": f"Basic {creds}",
+        })
+    import ssl
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+            return True, "OK"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Jenkins credentials invalid (401 Unauthorized)"
+        if e.code == 403:
+            return False, "Jenkins credentials lack permissions (403 Forbidden)"
+        return False, f"HTTP {e.code}: {e.reason}"
+    except Exception as e:
+        return False, f"Connection failed: {e}"
+
+
+_SERVER_VALIDATORS = {
+    "gw-sourcegraph": ("Sourcegraph", _validate_sourcegraph, True),
+    "github":         ("GitHub",      _validate_github,      False),
+    "atlassian":      ("Jira",        _validate_jira,        True),
+}
+
+_STANDALONE_VALIDATORS = {
+    "jenkins": ("Jenkins", _validate_jenkins, False),
+}
+
+# Additional checks run after the primary validator
+_EXTRA_VALIDATORS = {
+    "github": [
+        ("GitHub Org Access", _validate_github_org_access),
+    ],
+    "atlassian": [
+        ("Confluence", _validate_confluence),
+    ],
+}
+
+
+def validate_mcp_tokens(required_servers=None, github_org="nutanix-core"):
+    """Validate tokens for all configured MCP servers.
+
+    Checks each server's token by making a lightweight API call.
+    Prints a status table and terminates with ``sys.exit(1)`` if any
+    **critical** server fails.
+
+    Args:
+        required_servers: list of server keys that must pass (default:
+            all servers marked critical in ``_SERVER_VALIDATORS``).
+        github_org: GitHub organization to check SSO access for.
+
+    Returns:
+        dict mapping server key → (ok: bool, message: str).
+    """
+    import pandas as pd
+
+    results = {}
+    critical_failures = []
+    validation_rows = []
+
+    for server_key, (label, validator, _) in _SERVER_VALIDATORS.items():
+        try:
+            _, headers = load_mcp_config(server_key)
+        except RuntimeError:
+            msg = f"Server '{server_key}' not found in mcp.json"
+            results[server_key] = (False, msg)
+            critical_failures.append((label, msg))
+            validation_rows.append((label, "FAIL", msg))
+            continue
+
+        ok, msg = validator(headers)
+        results[server_key] = (ok, msg)
+        validation_rows.append((label, "OK" if ok else "FAIL", msg))
+
+        if ok and server_key in _EXTRA_VALIDATORS:
+            for extra_label, extra_validator in _EXTRA_VALIDATORS[server_key]:
+                eok, emsg = extra_validator(headers)
+                results[f"{server_key}:{extra_label}"] = (eok, emsg)
+                validation_rows.append((extra_label, "OK" if eok else "WARN", emsg))
+
+        if not ok:
+            critical_failures.append((label, msg))
+
+    for server_key, (label, validator, _) in _STANDALONE_VALIDATORS.items():
+        if required_servers and server_key not in required_servers:
+            continue
+        ok, msg = validator()
+        results[server_key] = (ok, msg)
+        validation_rows.append((label, "OK" if ok else "FAIL", msg))
+        if not ok:
+            critical_failures.append((label, msg))
+
+    df = pd.DataFrame(validation_rows, columns=["Server", "Status", "Message"])
+    print("\n" + "=" * 60, file=sys.stderr)
+    print("  MCP Server Token Validation", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    print(df.to_markdown(index=False, tablefmt="simple"), file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+
+    if critical_failures:
+        print("\nCRITICAL: The following servers failed validation:\n",
+              file=sys.stderr)
+        df_fail = pd.DataFrame(critical_failures, columns=["Server", "Error"])
+        print(df_fail.to_markdown(index=False, tablefmt="simple"), file=sys.stderr)
+        print("\nFix the token(s) above and re-run. "
+              "Tokens are configured in .cursor/rules/mcp.json and tools/.env\n",
+              file=sys.stderr)
+        sys.exit(1)
+
+    return results

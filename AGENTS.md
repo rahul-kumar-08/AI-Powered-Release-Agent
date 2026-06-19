@@ -82,3 +82,13 @@ python3 agent_runner.py --steps-json steps/master-5.json "master pipeline"
 - Confluence: `AOS_CONFLUENCE_PAGE_ID` / `PC_CONFLUENCE_PAGE_ID` are separate parent pages; child pages auto-discovered per branch. Deduplicated by GoldImage version, sorted newest-first.
 - All timestamps UTC from Gerrit commit dates via Sourcegraph.
 - For Gerrit repos, push to `refs/for/<branch>` for review — never push directly.
+
+## Cursor Cloud specific instructions
+
+Environment basics: Python 3 CLI project, no build artifacts, no server/port. Always run from the repo root so the `src.` / `tools.` package imports resolve (e.g. `python3 release_query.py ...`, not from inside `src/`). Standard commands live in the `release_query.py` / `agent_runner.py` sections above and in `README.md`.
+
+- **Dependencies:** `pip install -r requirements.txt` (the update script does this on startup). `pandas` + `tabulate` are required at runtime even though they look like dev-only deps — `src/formatter.py` and `tools/mcp_client.py` render tables via `DataFrame.to_markdown()` (which needs the `tabulate` backend), and `agent_runner.py` summaries use pandas too.
+- **No tests, no linter config:** there is no test suite and no committed flake8/ruff/pylint/mypy config. Use `python3 -m compileall release_query.py agent_runner.py src tools` as the syntax/build check. (Source files carry `# noqa` markers, implying flake8 was used historically, but no config ships.)
+- **Live runs need secrets that are NOT in the repo:** running `release_query.py` (or `agent_runner.py` without `--dry-run`) first calls `validate_mcp_tokens()`, which reads the gitignored `.cursor/rules/mcp.json` (MCP gateway URLs + auth headers). Without that file it exits 1 with "Server '…' not found in mcp.json". A full end-to-end run also needs `SOURCEGRAPH_TOKEN`, `GITHUB_TOKEN`, and Jira/Confluence tokens (in `tools/.env`). None of these are present in the cloud VM by default.
+- **Offline verification without secrets:** `python3 agent_runner.py --dry-run --steps-json steps/<file>.json "msg"` exercises mission dispatch + summary tables with zero network. To verify the signature release-table output stage, feed rows (schema in `src/version.py`: `goldimage_version`, `main_ticket`, `changelog_url`, `rpm_url`, `merge_date`, `notes`) through `src.formatter.format_table` / `format_markdown` / `format_json`.
+- **`agent_runner.py` natural-language mode** (no `--steps-json`) needs `CURSOR_API_KEY` to reach the Cursor SDK for mission decomposition; `--steps-json` runs skip the SDK entirely.

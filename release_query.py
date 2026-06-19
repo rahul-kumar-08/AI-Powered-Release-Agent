@@ -47,7 +47,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
-from tools.mcp_client import call_tool as _mcp_call_tool, _get_env
+from tools.mcp_client import call_tool as _mcp_call_tool, _get_env, validate_mcp_tokens
 from tools.mcp_sourcegraph_client import TOOL_PREFIX
 from tools.mcp_github_client import fetch_postmerge_ci
 
@@ -72,6 +72,79 @@ ENDOR_PC_STS_BASE = f"{BASE_URL}/GoldImages/PC_GoldImages/pc"
 
 def _log(msg):
     print(f"[release-query] {msg}", file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline Status Tracking
+# ---------------------------------------------------------------------------
+
+_pipeline_stats = {}
+
+
+def _print_pipeline_status():
+    """Print a summary table of all pipeline stages and their results."""
+    s = _pipeline_stats
+    if not s:
+        return
+
+    stages = []
+    stages.append(("Releases Extracted", f"{s.get('rows', 0)} release(s)"))
+    stages.append(("Gerrit Commits",     f"{s.get('gerrit_commits', 0)} commit(s)"))
+    stages.append(("GitHub Commits",     f"{s.get('github_commits', 0)} commit(s)"))
+
+    if "ci_commits" in s:
+        ci_detail = f"{s['ci_commits']} commit(s) checked"
+        ci_ok = s.get("ci_success", 0)
+        ci_fail = s.get("ci_failure", 0)
+        ci_pending = s.get("ci_pending", 0)
+        parts = []
+        if ci_ok:
+            parts.append(f"{ci_ok} success")
+        if ci_fail:
+            parts.append(f"{ci_fail} failure")
+        if ci_pending:
+            parts.append(f"{ci_pending} pending")
+        if parts:
+            ci_detail += f" ({', '.join(parts)})"
+        stages.append(("CI Status", ci_detail))
+    elif s.get("ci_skipped"):
+        stages.append(("CI Status", "skipped (--no-ci-status)"))
+
+    if "rpm_downloaded" in s:
+        stages.append(("RPM Download", f"{s['rpm_downloaded']} file(s) downloaded"))
+    if "changelogs" in s:
+        stages.append(("Changelog", f"{s['changelogs']} file(s) generated"))
+    if "sftp_uploaded" in s:
+        stages.append(("SFTP Upload", f"{s['sftp_uploaded']} file(s) uploaded"))
+    if "endor_published" in s or "endor_skipped" in s:
+        pub = s.get("endor_published", 0)
+        skip = s.get("endor_skipped", 0)
+        fail = s.get("endor_failed", 0)
+        parts = []
+        if pub:
+            parts.append(f"{pub} published")
+        if skip:
+            parts.append(f"{skip} already exist")
+        if fail:
+            parts.append(f"{fail} failed")
+        stages.append(("Endor Publish", ", ".join(parts) if parts else "0 versions"))
+    elif s.get("endor_skipped_flag"):
+        stages.append(("Endor Publish", "skipped (--no-publish-endor)"))
+    if "confluence_added" in s or "confluence_skipped" in s:
+        added = s.get("confluence_added", 0)
+        skipped = s.get("confluence_skipped", 0)
+        stages.append(("Confluence", f"+{added} added, {skipped} skipped"))
+    elif s.get("confluence_skipped_flag"):
+        stages.append(("Confluence", "skipped (--no-upload-confluence)"))
+
+    if os.environ.get("_RELEASE_AGENT_SUBPROCESS"):
+        return
+
+    import pandas as pd
+    df = pd.DataFrame(stages, columns=["Stage", "Result"])
+    print(f"\n{'=' * 26} PIPELINE STATUS {'=' * 26}", file=sys.stderr)
+    print(df.to_markdown(index=False, tablefmt="simple"), file=sys.stderr)
+    print("-" * 68, file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -1443,86 +1516,14 @@ def _is_valid_ticket(ticket):
 
 def format_table(rows, validate_urls=False, with_github_date=False, with_sg_date=False):
     """Format rows as the standard GoldImage release table."""
-    if not rows:
-        print("No releases found.")
-        return
-
-    if validate_urls:
-        _log("Validating URLs...")
-        for row in rows:
-            row["changelog_valid"] = validate_url(row["changelog_url"])
-            row["rpm_valid"] = validate_url(row["rpm_url"])
-            if not row["changelog_valid"]:
-                row["changelog_url"] = "Data not found"
-            if not row["rpm_valid"]:
-                row["rpm_url"] = "Data not found"
-
-    hdr = f"| {'GoldImage Version':<45} | {'Main Ticket':<14} | {'Change Log':<90} | {'RPM List':<90} | {'Merge Date':<12} |"
-    sep = f"|{'-'*47}|{'-'*16}|{'-'*92}|{'-'*92}|{'-'*14}|"
-    if with_github_date:
-        hdr += f" {'PR Merge Date':<14} |"
-        sep += f"{'-'*16}|"
-    if with_sg_date:
-        hdr += f" {'CR Merge Date':<14} |"
-        sep += f"{'-'*16}|"
-    hdr += f" {'Notes':<8} |"
-    sep += f"{'-'*10}|"
-
-    print(f"\n{hdr}")
-    print(sep)
-
-    for row in rows:
-        line = f"| {row['goldimage_version']:<45} | {row['main_ticket']:<14} | {row['changelog_url']:<90} | {row['rpm_url']:<90} | {row['merge_date']:<12} |"
-        if with_github_date:
-            line += f" {row.get('github_date', 'N/A'):<14} |"
-        if with_sg_date:
-            line += f" {row.get('sg_date', 'N/A'):<14} |"
-        line += f" {row['notes']:<8} |"
-        print(line)
-
-    print(f"\nTotal: {len(rows)} release(s)")
+    from src.formatter import format_table as _fmt
+    _fmt(rows, validate_urls, with_github_date, with_sg_date)
 
 
 def format_markdown(rows, validate_urls=False, with_github_date=False, with_sg_date=False):
     """Format as a cleaner markdown table with linked URLs."""
-    if not rows:
-        print("No releases found.")
-        return
-
-    if validate_urls:
-        _log("Validating URLs...")
-        for row in rows:
-            if not validate_url(row["changelog_url"]):
-                row["changelog_url"] = ""
-            if not validate_url(row["rpm_url"]):
-                row["rpm_url"] = ""
-
-    hdr = "| GoldImage Version | Main Ticket | Change Log | RPM List | Merge Date |"
-    sep = "|---|---|---|---|---|"
-    if with_github_date:
-        hdr += " PR Merge Date |"
-        sep += "---|"
-    if with_sg_date:
-        hdr += " CR Merge Date |"
-        sep += "---|"
-    hdr += " Notes |"
-    sep += "---|"
-
-    print(f"\n{hdr}")
-    print(sep)
-
-    for row in rows:
-        cl = f"[changelog]({row['changelog_url']})" if row["changelog_url"] else "Data not found"
-        rpm = f"[rpm]({row['rpm_url']})" if row["rpm_url"] else "Data not found"
-        line = f"| {row['goldimage_version']} | {row['main_ticket']} | {cl} | {rpm} | {row['merge_date']} |"
-        if with_github_date:
-            line += f" {row.get('github_date', 'N/A')} |"
-        if with_sg_date:
-            line += f" {row.get('sg_date', 'N/A')} |"
-        line += f" {row['notes']} |"
-        print(line)
-
-    print(f"\nTotal: {len(rows)} release(s)")
+    from src.formatter import format_markdown as _fmt
+    _fmt(rows, validate_urls, with_github_date, with_sg_date)
 
 
 # ---------------------------------------------------------------------------
@@ -2206,11 +2207,15 @@ Examples:
     parser.add_argument("--generate-changelog", action="store_true", default=True,
                         help="Generate changelog.txt from template (default: on)")
     parser.add_argument("--upload-sftp", action="store_true", default=True,
-                        help="Upload changelog/rpm to SFTP server (default: on)")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--upload-confluence", action="store_true", default=True,
-                        help="Upload release table to Confluence (default: on)")
-    parser.add_argument("--no-upload-confluence", action="store_true",
-                        help="Skip Confluence upload")
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--publish-endor", action="store_true", default=True,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--no-upload", action="store_true",
+                        help="Skip SFTP upload, Jenkins endor publish, and Confluence upload")
+    parser.add_argument("--force-publish-endor", action="store_true",
+                        help="Force republish to endor even if already present")
     _default_rpm_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "releases"
     )
@@ -2223,6 +2228,24 @@ Examples:
 
     server_key = args.server
 
+    # --no-* flags override defaults (process early so validation knows what's needed)
+    if args.no_upload:
+        args.upload_sftp = False
+        args.publish_endor = False
+        args.upload_confluence = False
+    if args.no_ci_status:
+        args.ci_status = False
+
+    # Validate MCP server tokens before starting the pipeline.
+    # Skip when launched as a subprocess of agent_runner.py (already validated).
+    if not os.environ.get("_RELEASE_AGENT_SUBPROCESS"):
+        required = [server_key, "atlassian"]
+        if args.ci_status:
+            required.append("github")
+        if args.publish_endor:
+            required.append("jenkins")
+        validate_mcp_tokens(required_servers=required)
+
     # Fetch data
     _log(f"Fetching releases: branch={args.branch}, count={args.count}, filter={args.filter}")
 
@@ -2232,9 +2255,11 @@ Examples:
 
     gerrit_commits = fetch_gerrit_releases(server_key, args.branch, fetch_count)
     _log(f"Gerrit: {len(gerrit_commits)} commits")
+    _pipeline_stats["gerrit_commits"] = len(gerrit_commits)
 
     github_commits = fetch_github_releases(server_key, args.branch, fetch_count)
     _log(f"GitHub: {len(github_commits)} commits")
+    _pipeline_stats["github_commits"] = len(github_commits)
 
     github_epics = fetch_github_epics(server_key, args.branch)
     _log(f"GitHub EPICs: {len(github_epics)} releases with Epic field")
@@ -2250,17 +2275,12 @@ Examples:
     # on Gerrit; the comment's 'created' timestamp is the actual merge date.
     _resolve_merge_dates_from_jira(rows, args.branch)
 
-    # --no-* flags override defaults
-    if args.no_upload_confluence:
-        args.upload_confluence = False
-    if args.no_ci_status:
-        args.ci_status = False
-
     display_count = args.count
     # Always keep all_rows so we can find the previous release per type
     all_rows = rows
     rows = rows[:display_count]
     _log(f"Output: {len(rows)} rows")
+    _pipeline_stats["rows"] = len(rows)
 
     # Add branch as explicit field in every row
     for row in all_rows:
@@ -2289,6 +2309,18 @@ Examples:
             row["ci_cvm"] = ci.get("cvm", {})
             row["ci_pcvm"] = ci.get("pcvm", {})
         _log(f"CI status fetched for {len(seen_shas)} unique commit(s)")
+        _pipeline_stats["ci_commits"] = len(seen_shas)
+        ci_states = []
+        for row in all_rows:
+            for k in ("ci_cvm", "ci_pcvm"):
+                st = row.get(k, {}).get("state")
+                if st:
+                    ci_states.append(st)
+        _pipeline_stats["ci_success"] = ci_states.count("success")
+        _pipeline_stats["ci_failure"] = ci_states.count("failure")
+        _pipeline_stats["ci_pending"] = ci_states.count("pending")
+    else:
+        _pipeline_stats["ci_skipped"] = True
 
     # Fetch Jira ticket summaries for all rows (ticket key → description)
     all_ticket_keys = set()
@@ -2362,6 +2394,7 @@ Examples:
                                            args.filter)
         for d in downloaded:
             _log(f"[{d['rtype']}] {d['file']} → {d['path']}")
+        _pipeline_stats["rpm_downloaded"] = len(downloaded)
 
     # Generate changelog.txt if requested (after RPMs are on disk)
     if args.generate_changelog:
@@ -2370,12 +2403,37 @@ Examples:
                                         args.filter, args.branch)
         for cl in changelogs:
             _log(f"[{cl['rtype']}] changelog → {cl['path']}")
+        _pipeline_stats["changelogs"] = len(changelogs)
 
     # Upload changelog + rpm to SFTP server
     if args.upload_sftp:
         _log("Uploading files to SFTP server...")
         sftp_results = upload_to_sftp(rows, args.rpm_dir, args.filter)
         _log(f"SFTP upload complete: {len(sftp_results)} file(s) uploaded")
+        _pipeline_stats["sftp_uploaded"] = len(sftp_results)
+
+    # Publish to endor via Jenkins PUBLISH_GOLD_IMAGE
+    if args.publish_endor:
+        from src.endor import publish_to_endor, rewrite_urls_to_endor
+        _log("Publishing to endor via Jenkins...")
+        endor_results = publish_to_endor(
+            rows, args.filter,
+            dry_run=False, force=args.force_publish_endor,
+        )
+        published = [r for r in endor_results if r.get("success")]
+        skipped = [r for r in endor_results if r.get("skipped")]
+        failed = [r for r in endor_results
+                  if not r.get("success") and not r.get("skipped") and not r.get("dry_run")]
+        _log(f"Endor publish complete: {len(published)} published, "
+             f"{len(skipped)} already exist, {len(failed)} failed")
+        _pipeline_stats["endor_published"] = len(published)
+        _pipeline_stats["endor_skipped"] = len(skipped)
+        _pipeline_stats["endor_failed"] = len(failed)
+
+        if published or skipped:
+            rewrite_urls_to_endor(rows, args.branch)
+    else:
+        _pipeline_stats["endor_skipped_flag"] = True
 
     # Upload release table to Confluence
     if args.upload_confluence:
@@ -2384,6 +2442,10 @@ Examples:
         total_added = sum(r.get("added", 0) for r in confluence_results)
         total_skipped = sum(r.get("skipped", 0) for r in confluence_results)
         _log(f"Confluence upload complete: {total_added} added, {total_skipped} already exist")
+        _pipeline_stats["confluence_added"] = total_added
+        _pipeline_stats["confluence_skipped"] = total_skipped
+    else:
+        _pipeline_stats["confluence_skipped_flag"] = True
 
     # Always save JSON to releases/release_data.json (after ALL enrichment)
     default_json_path = os.path.join(args.rpm_dir, "release_data.json")
@@ -2401,20 +2463,16 @@ Examples:
     else:
         format_table(rows, args.validate_urls, with_github_date=gh_date, with_sg_date=sg_date)
 
+    # Print pipeline status summary
+    _print_pipeline_status()
+
     # Print version validation summary if any mismatches
     if mismatches:
-        print(f"\n**Version Mismatch Summary** ({len(mismatches)} release(s) affected)\n")
-        hdr = (f"| {'Release':<40} | {'EPIC':<12} | {'Heading Version':<40} "
-               f"| {'Actual in variables.sh':<40} | {'Verdict':<42} |")
-        sep = f"|{'-'*42}|{'-'*14}|{'-'*42}|{'-'*42}|{'-'*44}|"
-        print(hdr)
-        print(sep)
+        import pandas as pd
+        import shutil
+        records = []
         for mm in mismatches:
             source = mm.get("source", "unknown")
-            epic = mm.get("epic_key") or "--"
-            confirmed = mm.get("confirmed_version", "--")
-            heading = mm.get("heading_version") or "--"
-            file_ver = mm.get("file_version") or "--"
             if source == "heading+jira":
                 verdict = "Heading + Jira agree → variables.sh needs fix"
             elif source == "file+jira":
@@ -2423,7 +2481,22 @@ Examples:
                 verdict = "No Jira confirmation → verify manually"
             else:
                 verdict = "All differ → verify manually"
-            print(f"| {confirmed:<40} | {epic:<12} | {heading:<40} | {file_ver:<40} | {verdict:<42} |")
+            records.append({
+                "Release": mm.get("confirmed_version", "--"),
+                "EPIC": mm.get("epic_key") or "--",
+                "Heading Version": mm.get("heading_version") or "--",
+                "Actual in variables.sh": mm.get("file_version") or "--",
+                "Verdict": verdict,
+            })
+        df = pd.DataFrame(records)
+        tw = shutil.get_terminal_size((120, 24)).columns
+        fixed = 14 + 12
+        flexible_cols = 3
+        sep_overhead = 6 * 3
+        flex_width = max(20, (tw - fixed - sep_overhead) // flexible_cols)
+        maxcol = [flex_width, 12, flex_width, flex_width, flex_width]
+        print(f"\n**Version Mismatch Summary** ({len(mismatches)} release(s) affected)\n")
+        print(df.to_markdown(index=False, maxcolwidths=maxcol))
         print()
 
 

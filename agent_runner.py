@@ -55,14 +55,14 @@ Available tools and their parameters:
            no_ci_status (bool, default false — skip CircleCI fetch),
            no_download_rpm (bool, default false — skip Artifactory RPM download),
            no_generate_changelog (bool, default false — skip changelog generation),
-           no_upload_sftp (bool, default false — skip SFTP upload),
-           no_upload_confluence (bool, default false — skip Confluence upload),
+           no_upload (bool, default false — skip SFTP, Jenkins endor, and Confluence),
+           force_publish_endor (bool, default false — force republish to endor),
            validate_urls (bool, default false — HEAD-check URLs),
            rpm_dir (string, optional — directory for downloaded RPM files)
 
 2. confluence_update — Re-upload or force-rebuild an existing Confluence page
    from a pre-generated JSON file. Only needed when release_query's built-in
-   Confluence upload was skipped (no_upload_confluence) or when you need to
+   Confluence upload was skipped (no_upload) or when you need to
    force-rebuild a page.
    params: input_json (string path, required — from release_query JSON output),
            branch (string, required),
@@ -78,13 +78,13 @@ Rules:
 - Do NOT add a separate confluence_update step unless the user explicitly asks
   to force-rebuild or re-upload from existing JSON.
 - If the user only wants to view releases without side effects, set
-  no_upload_sftp=true and no_upload_confluence=true.
+  no_upload=true to skip SFTP, endor, and Confluence in one flag.
 
 Examples:
 
 Mission: "Extract last 5 releases from master"
 Output:
-[{"step":1,"tool":"release_query","params":{"branch":"master","count":5,"no_upload_sftp":true,"no_upload_confluence":true}}]
+[{"step":1,"tool":"release_query","params":{"branch":"master","count":5,"no_upload":true}}]
 
 Mission: "Get releases from ganges-7.5 and update confluence"
 Output:
@@ -92,11 +92,11 @@ Output:
 
 Mission: "Last 3 PC releases from master"
 Output:
-[{"step":1,"tool":"release_query","params":{"branch":"master","count":3,"filter":"pc","no_upload_sftp":true,"no_upload_confluence":true}}]
+[{"step":1,"tool":"release_query","params":{"branch":"master","count":3,"filter":"pc","no_upload":true}}]
 
 Mission: "Force rebuild confluence page for ganges-7.6 PC releases"
 Output:
-[{"step":1,"tool":"release_query","params":{"branch":"ganges-7.6","count":5,"filter":"pc","format":"json","output":"/tmp/releases_ganges-7.6_5.json","no_upload_confluence":true}},{"step":2,"tool":"confluence_update","params":{"input_json":"/tmp/releases_ganges-7.6_5.json","branch":"ganges-7.6","type":"PC","force_rebuild":true}}]
+[{"step":1,"tool":"release_query","params":{"branch":"ganges-7.6","count":5,"filter":"pc","format":"json","output":"/tmp/releases_ganges-7.6_5.json","no_upload":true}},{"step":2,"tool":"confluence_update","params":{"input_json":"/tmp/releases_ganges-7.6_5.json","branch":"ganges-7.6","type":"PC","force_rebuild":true}}]
 
 Now decompose this mission:
 """
@@ -221,10 +221,10 @@ def run_release_query(params):
         cmd.append("--no-download-rpm")
     if params.get("no_generate_changelog"):
         cmd.append("--no-generate-changelog")
-    if params.get("no_upload_sftp"):
-        cmd.append("--no-upload-sftp")
-    if params.get("no_upload_confluence"):
-        cmd.append("--no-upload-confluence")
+    if params.get("no_upload"):
+        cmd.append("--no-upload")
+    if params.get("force_publish_endor"):
+        cmd.append("--force-publish-endor")
     if params.get("validate_urls"):
         cmd.append("--validate-urls")
     return run_subprocess(cmd, stream=True)
@@ -300,9 +300,11 @@ def run_subprocess(cmd, stream=False):
 def _run_streaming(cmd):
     """Run a subprocess with real-time stdout/stderr streaming."""
     try:
+        env = os.environ.copy()
+        env["_RELEASE_AGENT_SUBPROCESS"] = "1"
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1,
+            text=True, bufsize=1, env=env,
         )
         stdout_lines = []
         stderr_lines = []
@@ -404,6 +406,9 @@ _STAGE_PATTERNS = [
     ("SFTP Upload",
      r"\[release-query\] SFTP upload complete: (\d+) file",
      lambda m: "%s file(s) uploaded" % m.group(1)),
+    ("Endor Publish",
+     r"\[release-query\] Endor publish complete: (\d+) published, (\d+) already exist, (\d+) failed",
+     lambda m: "%s published, %s exist, %s failed" % (m.group(1), m.group(2), m.group(3))),
     ("Confluence",
      r"\[release-query\] Confluence upload complete: (\d+) added, (\d+) already exist",
      lambda m: "+%s added, %s skipped" % (m.group(1), m.group(2))),
@@ -511,6 +516,7 @@ def dispatch_steps(steps, dry_run=False, fail_fast=False, verbose=False):
 
 def print_summary(results):
     """Print final summary with stage status, step results, and discrepancies."""
+    import pandas as pd
 
     # Stage status
     all_stages = []
@@ -518,23 +524,22 @@ def print_summary(results):
         all_stages.extend(r.get("stage_stats", []))
 
     if all_stages:
+        df = pd.DataFrame(all_stages, columns=["Stage", "Result"])
         print("\n%s PIPELINE STATUS %s" % ("=" * 26, "=" * 26))
-        print("%-22s %s" % ("Stage", "Result"))
-        print("-" * 68)
-        for label, detail in all_stages:
-            print("%-22s %s" % (label, detail))
+        print(df.to_markdown(index=False, tablefmt="simple"))
         print("-" * 68)
 
     # Step results
-    print("\n%s STEP RESULTS %s" % ("=" * 27, "=" * 27))
-    print("%-6s %-25s %-10s" % ("Step", "Tool", "Status"))
-    print("-" * 50)
+    step_rows = []
     for r in results:
         status = "OK" if r.get("ok") else "FAILED"
         if r.get("dry_run"):
             status = "DRY RUN"
-        print("%-6s %-25s %-10s" % (r.get("step", "?"), r.get("tool", "?"), status))
-    print("-" * 50)
+        step_rows.append((r.get("step", "?"), r.get("tool", "?"), status))
+    df = pd.DataFrame(step_rows, columns=["Step", "Tool", "Status"])
+    print("\n%s STEP RESULTS %s" % ("=" * 27, "=" * 27))
+    print(df.to_markdown(index=False, tablefmt="simple"))
+    print("-" * 68)
     ok_count = sum(1 for r in results if r.get("ok"))
     print("Total: %d/%d steps succeeded." % (ok_count, len(results)))
 
@@ -544,10 +549,10 @@ def print_summary(results):
         all_discrepancies.extend(r.get("discrepancies", []))
 
     if all_discrepancies:
+        df = pd.DataFrame(all_discrepancies, columns=["Issue"])
         print("\n%s DISCREPANCIES (%d) %s" % (
             "=" * 23, len(all_discrepancies), "=" * 23))
-        for d in all_discrepancies:
-            print("  - %s" % d)
+        print(df.to_markdown(index=False, tablefmt="simple"))
         print("-" * 68)
     else:
         print("\nNo discrepancies detected.")
@@ -583,6 +588,16 @@ def main():
         help="Skip Cursor decomposition — use a pre-built JSON step file instead",
     )
     args = parser.parse_args()
+
+    # Validate MCP server tokens before running any steps
+    if not args.dry_run:
+        try:
+            from tools.mcp_client import validate_mcp_tokens
+            validate_mcp_tokens()
+        except SystemExit:
+            raise
+        except Exception as e:
+            print("[Runner] Token validation skipped: %s" % e, file=sys.stderr)
 
     cursor_key = os.environ.get("CURSOR_API_KEY")
 

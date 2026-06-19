@@ -6,6 +6,4 @@ __pycache__/
 *.pyc
 
 # MCP config contains auth tokens — keep local only
-.cursor/mcp.json
-.cursor/rules/mcp.json
 docs

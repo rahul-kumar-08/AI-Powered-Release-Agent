@@ -10,7 +10,7 @@ from src.config import _log, mcp_call_tool, _get_env
 
 def _resolve_jira_token():
     """Resolve Jira token from env, .env, or mcp.json (in that order)."""
-    token = _get_env("JIRA_API_TOKEN")
+    token = _get_env("JIRA_TOKEN")
     if token:
         return token
     try:

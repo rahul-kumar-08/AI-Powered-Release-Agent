@@ -104,9 +104,24 @@ def _strip_json_comments(text):
     return "\n".join(lines)
 
 
+import re as _re
+
+_VAR_PATTERN = _re.compile(r"\$?\{(\w+)\}")
+
+
+def _resolve_vars(value):
+    """Replace ``${VAR}`` or ``{VAR}`` placeholders with values from .env / environment."""
+    def _sub(m):
+        return _get_env(m.group(1)) or m.group(0)
+    return _VAR_PATTERN.sub(_sub, value)
+
+
 def load_mcp_config(server_key):
     """
     Load MCP server URL and headers from .cursor/rules/mcp.json.
+
+    Placeholder tokens like ``${GITHUB_TOKEN}`` or ``{SOURCEGRAPH_TOKEN}``
+    in header values are resolved from ``tools/.env`` / environment variables.
 
     Returns:
         (url: str, headers: dict)
@@ -122,7 +137,7 @@ def load_mcp_config(server_key):
             if server_key in servers:
                 server = servers[server_key]
                 url = server.get("url", "")
-                headers = dict(server.get("headers", {}))
+                headers = {k: _resolve_vars(v) for k, v in server.get("headers", {}).items()}
                 return url, headers
     raise RuntimeError(f"MCP server '{server_key}' not found in mcp.json")
 
@@ -198,8 +213,9 @@ def _validate_sourcegraph(headers):
     token = headers.get("Authorization", "")
     if token.startswith("Bearer "):
         token = token[7:]
+    token = token or _get_env("SOURCEGRAPH_TOKEN")
     if not token:
-        return False, "No Sourcegraph token configured"
+        return False, "No Sourcegraph token configured (set SOURCEGRAPH_TOKEN in tools/.env)"
 
     sg_url = _get_env("SOURCEGRAPH_URL", "https://sourcegraph.ntnxdpro.com")
     url = f"{sg_url}/.api/search/stream?q=type:repo+count:1"
@@ -225,10 +241,9 @@ def _validate_github(headers):
     token = headers.get("Authorization", "")
     if token.startswith("Bearer "):
         token = token[7:]
-    env_token = _get_env("GITHUB_TOKEN")
-    token = env_token or token
+    token = token or _get_env("GITHUB_TOKEN")
     if not token:
-        return False, "No GitHub token configured (set GITHUB_TOKEN in tools/.env or Authorization in mcp.json)"
+        return False, "No GitHub token configured (set GITHUB_TOKEN in tools/.env)"
 
     req = urllib.request.Request("https://api.github.com/user", headers={
         "Authorization": f"Bearer {token}",
@@ -261,8 +276,7 @@ def _validate_github_org_access(headers, org="nutanix-core"):
     token = headers.get("Authorization", "")
     if token.startswith("Bearer "):
         token = token[7:]
-    env_token = _get_env("GITHUB_TOKEN")
-    token = env_token or token
+    token = token or _get_env("GITHUB_TOKEN")
     if not token:
         return False, "No token"
 
@@ -295,11 +309,11 @@ def _validate_github_org_access(headers, org="nutanix-core"):
 def _validate_jira(headers):
     """Validate Jira token via the REST API ``/myself`` endpoint."""
     token = (headers.get("X-Atlassian-Jira-Personal-Token")
-             or _get_env("JIRA_API_TOKEN"))
+             or _get_env("JIRA_TOKEN"))
     jira_url = (headers.get("X-Atlassian-Jira-Url")
                 or _get_env("JIRA_BASE_URL", "https://jira.nutanix.com"))
     if not token:
-        return False, "No Jira token configured"
+        return False, "No Jira token configured (set JIRA_TOKEN in tools/.env)"
 
     req = urllib.request.Request(f"{jira_url}/rest/api/2/myself", headers={
         "Authorization": f"Bearer {token}",
@@ -321,11 +335,11 @@ def _validate_jira(headers):
 def _validate_confluence(headers):
     """Validate Confluence token via a basic content API call."""
     token = (headers.get("X-Atlassian-Confluence-Personal-Token")
-             or _get_env("CONFLUENCE_API_TOKEN"))
+             or _get_env("CONFLUENCE_TOKEN"))
     confluence_url = (headers.get("X-Atlassian-Confluence-Url")
                       or _get_env("CONFLUENCE_BASE_URL"))
     if not token or not confluence_url:
-        return False, "No Confluence token or URL configured"
+        return False, "No Confluence token or URL configured (set CONFLUENCE_TOKEN in tools/.env)"
 
     confluence_url = confluence_url.rstrip("/")
     req = urllib.request.Request(

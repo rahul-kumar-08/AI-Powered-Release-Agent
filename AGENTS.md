@@ -82,3 +82,11 @@ python3 agent_runner.py --steps-json steps/master-5.json "master pipeline"
 - Confluence: `AOS_CONFLUENCE_PAGE_ID` / `PC_CONFLUENCE_PAGE_ID` are separate parent pages; child pages auto-discovered per branch. Deduplicated by GoldImage version, sorted newest-first.
 - All timestamps UTC from Gerrit commit dates via Sourcegraph.
 - For Gerrit repos, push to `refs/for/<branch>` for review — never push directly.
+
+## Cursor Cloud specific instructions
+
+- **Setup:** Python 3.12 with deps from `requirements.txt` (installed by the startup update script). There are no automated tests, no lint config, and no build step in this repo — it is a Python CLI. "Running" the app means invoking `release_query.py` / `agent_runner.py` (see commands above).
+- **Secrets are provided as environment variables**, not via a `tools/.env` file (which is gitignored and absent here). The code reads `os.environ` first and only falls back to `tools/.env`, so no file is needed. Do not create `tools/.env`.
+- **Network limitation (important):** The cloud VM can only reach public GitHub (`api.github.com` REST works; org SAML access OK). Internal Nutanix services are firewalled off and unreachable: Sourcegraph/Gerrit (`panacea-dev.eng.nutanix.com`, `sourcegraph.ntnxdpro.com`), Jira (`jira.nutanix.com`), Confluence (`confluence.eng.nutanix.com:8443`), Artifactory, Jenkins, and SFTP (`hoth`). As a result, `release_query.py` exits at the upfront token-validation step (Sourcegraph + Jira fail with connection/DNS errors) and the full pipeline cannot complete end-to-end from here.
+- **GitHub MCP** (`api.githubcopilot.com`) rejects the provided PAT (HTTP 400/401 — not Copilot-MCP enabled), but the **GitHub REST** path in `tools/mcp_github_client.py` works. Functions like `_github_rest_get`, `list_commits` (REST fallback), and `fetch_postmerge_ci` can fetch live Release PRs, commits, and CircleCI postmerge status from `nutanix-core/aos-goldimage-os`.
+- Standalone `tools/mcp_*_client.py` modules are **libraries** (no `__main__` dispatch despite usage examples in their docstrings); import and call their functions instead of running them as scripts. Only `tools/jenkins_tool.py` has a CLI entry point.

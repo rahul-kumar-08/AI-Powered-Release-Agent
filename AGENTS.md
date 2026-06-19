@@ -82,3 +82,10 @@ python3 agent_runner.py --steps-json steps/master-5.json "master pipeline"
 - Confluence: `AOS_CONFLUENCE_PAGE_ID` / `PC_CONFLUENCE_PAGE_ID` are separate parent pages; child pages auto-discovered per branch. Deduplicated by GoldImage version, sorted newest-first.
 - All timestamps UTC from Gerrit commit dates via Sourcegraph.
 - For Gerrit repos, push to `refs/for/<branch>` for review — never push directly.
+
+## Cursor Cloud specific instructions
+
+- This is a pure Python 3 CLI (Python 3.12 on the VM). Dependencies are in `requirements.txt` (`fastmcp`, `cursor-sdk`, `paramiko`); the startup update script installs them with `pip3 install -r requirements.txt` (into `~/.local`). No venv, Makefile, pyproject, lint config, or test suite exists.
+- Always run the tools from the repo root (`python3 release_query.py ...`, `python3 agent_runner.py ...`) so the `src` and `tools` packages import correctly.
+- "Lint"/sanity check: `python3 -m compileall release_query.py agent_runner.py src tools` (there is no flake8/ruff/pytest config). Offline core logic lives in pure modules `src/version.py`, `src/formatter.py`, `src/changelog.py` and can be exercised without any network/secrets (e.g. `_extract_heading_versions`, `build_endor_urls`, `format_merge_date`, `format_table`).
+- The full live pipeline (`release_query.py`, `agent_runner.py`) CANNOT run in the cloud VM: it requires `.cursor/rules/mcp.json` (gitignored, not present), `tools/.env` secrets, and network access to internal Nutanix services (Sourcegraph/Gerrit, GitHub enterprise, Jira, Confluence, Artifactory, hoth SFTP, Jenkins). Without `mcp.json` it fails fast with `RuntimeError: MCP server 'gw-sourcegraph' not found in mcp.json`. This is expected, not a setup bug.

@@ -82,3 +82,13 @@ python3 agent_runner.py --steps-json steps/master-5.json "master pipeline"
 - Confluence: `AOS_CONFLUENCE_PAGE_ID` / `PC_CONFLUENCE_PAGE_ID` are separate parent pages; child pages auto-discovered per branch. Deduplicated by GoldImage version, sorted newest-first.
 - All timestamps UTC from Gerrit commit dates via Sourcegraph.
 - For Gerrit repos, push to `refs/for/<branch>` for review — never push directly.
+
+## Cursor Cloud specific instructions
+
+This is a pure-Python CLI tool (no web server, daemon, build step, or test suite). Dependency setup is just `pip install -r requirements.txt` (handled by the startup update script). Run everything from the repo root as `python3 release_query.py ...` / `python3 agent_runner.py ...`.
+
+- **Lint/test/build:** there is no linter config, no automated tests, and no build. Use `python3 -m py_compile release_query.py agent_runner.py src/*.py tools/*.py` as a syntax-level sanity check.
+- **Live pipeline runs do not work from the cloud VM.** `release_query.py` extracts data from internal Nutanix services — Gerrit/Sourcegraph (`nugerrit.ntnxdpro.com`), Jira, Confluence — which are **not network-reachable** from the cloud VM (only public `api.github.com` is reachable). A live run fails early during extraction.
+- **Two pieces of config are required for live runs and are intentionally gitignored / absent here:** (1) `.cursor/rules/mcp.json` (MCP server URLs + auth headers; without it `load_mcp_config` raises `RuntimeError: MCP server '...' not found in mcp.json`), and (2) the data-source tokens `GITHUB_TOKEN`, `SOURCEGRAPH_TOKEN`, `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `CONFLUENCE_BASE_URL`, `CONFLUENCE_API_TOKEN` in `tools/.env` or the environment. The Artifactory / SFTP / Jenkins / Confluence-page-ID / `CURSOR_API_KEY` secrets are already injected as env vars.
+- **To exercise core logic offline** (commit-heading → GoldImage version → Endor URLs → table), import the real modules directly, e.g. `from src.version import _extract_heading_versions, build_endor_urls, format_merge_date` and `from src.formatter import format_table, format_markdown, format_json`. These functions are pure and need no network.
+- `agent_runner.py --steps-json steps/<file>.json --dry-run "msg"` decomposes and dispatches steps without any LLM/network call (zero cost), useful for verifying the runner wiring.

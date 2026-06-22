@@ -79,6 +79,9 @@ Rules:
   to force-rebuild or re-upload from existing JSON.
 - If the user only wants to view releases without side effects, set
   no_upload=true to skip SFTP, endor, and Confluence in one flag.
+- If the user says "force", "forcefully", "force update", or "forcefully update",
+  set force_publish_endor=true to re-publish even if the version already exists
+  on endor.
 
 Examples:
 
@@ -93,6 +96,10 @@ Output:
 Mission: "Last 3 PC releases from master"
 Output:
 [{"step":1,"tool":"release_query","params":{"branch":"master","count":3,"filter":"pc","no_upload":true}}]
+
+Mission: "Forcefully update last 2 PC releases from ganges-7.6"
+Output:
+[{"step":1,"tool":"release_query","params":{"branch":"ganges-7.6","count":2,"filter":"pc","force_publish_endor":true}}]
 
 Mission: "Force rebuild confluence page for ganges-7.6 PC releases"
 Output:

@@ -14,11 +14,11 @@ BASE_URL = _get_env("BASE_URL")
 ARTIFACTORY_BASE = _get_env("ARTIFACTORY_BASE")
 ARTIFACTORY_API_STORAGE = _get_env("ARTIFACTORY_API_STORAGE")
 
-ENDOR_AOS_RHEL9_MASTER = "/Centos_SVM/Master"
-ENDOR_AOS_STS_BASE = "/Centos_SVM/STS"
-ENDOR_AOS_RHEL8_BASE = "/Centos_SVM/STS"
-ENDOR_PC_MASTER = "/PC_GoldImages/pc"
-ENDOR_PC_STS_BASE = "/PC_GoldImages/pc"
+ENDOR_AOS_RHEL9_MASTER = "GoldImages/Centos_SVM/Master"
+ENDOR_AOS_STS_BASE = "GoldImages/Centos_SVM/STS"
+ENDOR_AOS_RHEL8_BASE = "GoldImages/Centos_SVM/STS"
+ENDOR_PC_MASTER = "GoldImages/PC_GoldImages/pc"
+ENDOR_PC_STS_BASE = "GoldImages/PC_GoldImages/pc"
 
 ENDOR_CACHE_BASE = "https://endor-cache-2.corp.nutanix.com/GoldImages"
 

@@ -63,11 +63,12 @@ BASE_URL = _get_env("BASE_URL")
 ARTIFACTORY_BASE = _get_env("ARTIFACTORY_BASE")
 ARTIFACTORY_API_STORAGE = _get_env("ARTIFACTORY_API_STORAGE")
 
-ENDOR_AOS_RHEL9_MASTER = f"{BASE_URL}/GoldImages/Centos_SVM/Master"
-ENDOR_AOS_STS_BASE = f"{BASE_URL}/GoldImages/Centos_SVM/STS"
-ENDOR_AOS_RHEL8_BASE = f"{BASE_URL}/GoldImages/Centos_SVM/STS"
-ENDOR_PC_MASTER = f"{BASE_URL}/GoldImages/PC_GoldImages/pc"
-ENDOR_PC_STS_BASE = f"{BASE_URL}/GoldImages/PC_GoldImages/pc"
+_BASE = BASE_URL.rstrip("/") if BASE_URL else ""
+ENDOR_AOS_RHEL9_MASTER = f"{_BASE}/GoldImages/Centos_SVM/Master"
+ENDOR_AOS_STS_BASE = f"{_BASE}/GoldImages/Centos_SVM/STS"
+ENDOR_AOS_RHEL8_BASE = f"{_BASE}/GoldImages/Centos_SVM/STS"
+ENDOR_PC_MASTER = f"{_BASE}/GoldImages/PC_GoldImages/pc"
+ENDOR_PC_STS_BASE = f"{_BASE}/GoldImages/PC_GoldImages/pc"
 
 
 def _log(msg):
@@ -2466,12 +2467,17 @@ Examples:
     # Print pipeline status summary
     _print_pipeline_status()
 
-    # Print version validation summary if any mismatches
-    if mismatches:
+    # Print version validation summary if any mismatches (filtered by requested type)
+    filtered_mismatches = mismatches
+    if args.filter in ("aos", "pc"):
+        filtered_mismatches = [
+            mm for mm in mismatches if mm.get("type", "").lower() == args.filter
+        ]
+    if filtered_mismatches:
         import pandas as pd
         import shutil
         records = []
-        for mm in mismatches:
+        for mm in filtered_mismatches:
             source = mm.get("source", "unknown")
             if source == "heading+jira":
                 verdict = "Heading + Jira agree → variables.sh needs fix"
@@ -2495,7 +2501,7 @@ Examples:
         sep_overhead = 6 * 3
         flex_width = max(20, (tw - fixed - sep_overhead) // flexible_cols)
         maxcol = [flex_width, 12, flex_width, flex_width, flex_width]
-        print(f"\n**Version Mismatch Summary** ({len(mismatches)} release(s) affected)\n")
+        print(f"\n**Version Mismatch Summary** ({len(filtered_mismatches)} release(s) affected)\n")
         print(df.to_markdown(index=False, maxcolwidths=maxcol))
         print()
 

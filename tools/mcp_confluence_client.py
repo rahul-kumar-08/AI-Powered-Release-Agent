@@ -381,6 +381,14 @@ def _clean_url_cell(cell):
     return cell
 
 
+def _clean_cell_backticks(cell):
+    """Strip markdown backtick wrapping from a cell value."""
+    cell = cell.strip()
+    if cell.startswith("`") and cell.endswith("`"):
+        cell = cell.strip("`").strip()
+    return cell
+
+
 def extract_existing_versions(page_content):
     """Parse table rows from existing page content (markdown or XHTML storage format).
 
@@ -397,6 +405,8 @@ def extract_existing_versions(page_content):
         cells = [c.strip() for c in line.split("|")[1:-1]]
         if len(cells) < 5:
             continue
+        # Strip backticks that MCP's convert_to_markdown adds around cell text
+        cells[0] = _clean_cell_backticks(cells[0])
         # Clean ticket cell: MCP may render Jira macro as garbled text
         # e.g. "Jiraissuekey,...,resolution<UUID>ENG-123456"
         cells[1] = _clean_ticket_cell(cells[1])

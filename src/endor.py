@@ -1,7 +1,6 @@
 """Stage 7: Jenkins publish to endor + URL rewrite."""
 
 import re
-import sys
 import urllib.request
 
 from src.config import (
@@ -62,7 +61,7 @@ def _derive_endor_params(row):
     full_path = _build_endor_base_dir(version, rtype, branch)
     destination = full_path.rsplit("/", 1)[0]
 
-    hoth_http_base = BASE_URL.rsplit("/GoldImages", 1)[0]
+    hoth_http_base = BASE_URL.rstrip("/")
     source_url = f"{hoth_http_base}/{full_path}/"
 
     return source_url, destination, full_path
@@ -147,8 +146,12 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
         queue_url, msg = trigger_build(DEFAULT_JOB, params)
         if not queue_url:
             _log(f"[{rtype}] FAILED to trigger build: {msg}")
-            _log(f"Aborting endor publish — trigger failed for {version}")
-            sys.exit(1)
+            results.append({
+                "rtype": rtype, "version": version,
+                "source_url": source_url, "destination": destination,
+                "success": False, "error": msg,
+            })
+            continue
 
         _log(f"[{rtype}] Build queued: {queue_url}")
 
@@ -156,8 +159,12 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
         build_number = resolve_queue_to_build(queue_url)
         if not build_number:
             _log(f"[{rtype}] FAILED: build never started (queue timeout)")
-            _log(f"Aborting endor publish — queue timeout for {version}")
-            sys.exit(1)
+            results.append({
+                "rtype": rtype, "version": version,
+                "source_url": source_url, "destination": destination,
+                "success": False, "error": "queue timeout",
+            })
+            continue
 
         _log(f"[{rtype}] Build #{build_number} started, waiting for completion...")
 
@@ -176,7 +183,11 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
         else:
             _log(f"[{rtype}] Build #{build_number} FAILED: {result_str} — {version}")
             _log(f"[{rtype}] {build_result.get('error', '')}")
-            _log(f"Aborting endor publish — build failed for {version}")
-            sys.exit(1)
+            results.append({
+                "rtype": rtype, "version": version,
+                "source_url": source_url, "destination": destination,
+                "success": False, "build_number": build_number,
+                "error": result_str,
+            })
 
     return results

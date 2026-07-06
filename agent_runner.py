@@ -33,11 +33,21 @@ import subprocess
 import sys
 import threading
 import time
+import re as _re
+
+import pandas as pd
+
+from tools.mcp_client import validate_mcp_tokens
+from cursor_sdk import Agent, AgentOptions, CursorAgentError
+from tools.mcp_confluence_client import upload_releases, _get_env
+from tools.mcp_confluence_client import detect_release_type
 
 MAX_TOOL_RETRIES = 3
 RETRY_BACKOFF_BASE = 2
 
-DECOMPOSITION_PROMPT = """You are a mission planner for a Release Agent. Your ONLY job is to
+ALL_BRANCHES = ["master", "ganges-7.3", "ganges-7.5", "ganges-7.6"]
+
+DECOMPOSITION_PROMPT_TEMPLATE = """You are a mission planner for a Release Agent. Your ONLY job is to
 decompose the user's mission into an ordered list of tool steps.
 
 Available tools and their parameters:
@@ -70,40 +80,63 @@ Available tools and their parameters:
            force_rebuild (bool, default false),
            dry_run (bool, default false)
 
+Known branches (in order): {all_branches}
+
 Rules:
 - Return ONLY a JSON array. No markdown, no explanation, no extra text.
-- Each element: {"step": N, "tool": "<name>", "params": {...}}
+- Each element: {{"step": N, "tool": "<name>", "params": {{...}}}}
 - Infer defaults: branch="master", count=5 when not specified.
 - A single release_query step handles the full pipeline including Confluence.
 - Do NOT add a separate confluence_update step unless the user explicitly asks
   to force-rebuild or re-upload from existing JSON.
-- If the user only wants to view releases without side effects, set
-  no_upload=true to skip SFTP, endor, and Confluence in one flag.
+- Default to no_upload=true UNLESS the user explicitly asks to "update",
+  "upload", "push to confluence", "publish", or "update confluence".
+  Verbs like "get", "extract", "show", "list", "fetch" are read-only
+  and MUST include no_upload=true.
 - If the user says "force", "forcefully", "force update", or "forcefully update",
   set force_publish_endor=true to re-publish even if the version already exists
   on endor.
+- When the user says "last release", "latest release", or "last 1 release"
+  (singular, no number, or the number 1), set count=1. Only use higher counts
+  when a specific number > 1 is stated.
+- When the user says "each branch", "all branches", or "every branch", generate
+  one release_query step PER branch from the known branches list above.
+  Each step must have a different branch. Number steps sequentially.
+- When the user says "both AOS and PC" or "AOS and PC", or "each AOS and PC",
+  or asks for releases from both types, set filter="all". With filter="all",
+  count applies PER TYPE (count=1 gives 1 AOS + 1 PC).
+  When the user says only "AOS", set filter="aos". When the user says only
+  "PC", set filter="pc".
 
 Examples:
 
 Mission: "Extract last 5 releases from master"
 Output:
-[{"step":1,"tool":"release_query","params":{"branch":"master","count":5,"no_upload":true}}]
+[{{"step":1,"tool":"release_query","params":{{"branch":"master","count":5,"no_upload":true}}}}]
 
 Mission: "Get releases from ganges-7.5 and update confluence"
 Output:
-[{"step":1,"tool":"release_query","params":{"branch":"ganges-7.5","count":5}}]
+[{{"step":1,"tool":"release_query","params":{{"branch":"ganges-7.5","count":5}}}}]
 
 Mission: "Last 3 PC releases from master"
 Output:
-[{"step":1,"tool":"release_query","params":{"branch":"master","count":3,"filter":"pc","no_upload":true}}]
+[{{"step":1,"tool":"release_query","params":{{"branch":"master","count":3,"filter":"pc","no_upload":true}}}}]
 
 Mission: "Forcefully update last 2 PC releases from ganges-7.6"
 Output:
-[{"step":1,"tool":"release_query","params":{"branch":"ganges-7.6","count":2,"filter":"pc","force_publish_endor":true}}]
+[{{"step":1,"tool":"release_query","params":{{"branch":"ganges-7.6","count":2,"filter":"pc","force_publish_endor":true}}}}]
+
+Mission: "Get last releases from each branch for both PC and AOS"
+Output:
+[{{"step":1,"tool":"release_query","params":{{"branch":"master","count":1,"filter":"all","no_upload":true}}}},{{"step":2,"tool":"release_query","params":{{"branch":"ganges-7.3","count":1,"filter":"all","no_upload":true}}}},{{"step":3,"tool":"release_query","params":{{"branch":"ganges-7.5","count":1,"filter":"all","no_upload":true}}}},{{"step":4,"tool":"release_query","params":{{"branch":"ganges-7.6","count":1,"filter":"all","no_upload":true}}}}]
+
+Mission: "Latest PC release from every branch"
+Output:
+[{{"step":1,"tool":"release_query","params":{{"branch":"master","count":1,"filter":"pc","no_upload":true}}}},{{"step":2,"tool":"release_query","params":{{"branch":"ganges-7.3","count":1,"filter":"pc","no_upload":true}}}},{{"step":3,"tool":"release_query","params":{{"branch":"ganges-7.5","count":1,"filter":"pc","no_upload":true}}}},{{"step":4,"tool":"release_query","params":{{"branch":"ganges-7.6","count":1,"filter":"pc","no_upload":true}}}}]
 
 Mission: "Force rebuild confluence page for ganges-7.6 PC releases"
 Output:
-[{"step":1,"tool":"release_query","params":{"branch":"ganges-7.6","count":5,"filter":"pc","format":"json","output":"/tmp/releases_ganges-7.6_5.json","no_upload":true}},{"step":2,"tool":"confluence_update","params":{"input_json":"/tmp/releases_ganges-7.6_5.json","branch":"ganges-7.6","type":"PC","force_rebuild":true}}]
+[{{"step":1,"tool":"release_query","params":{{"branch":"ganges-7.6","count":5,"filter":"pc","format":"json","output":"/tmp/releases_ganges-7.6_5.json","no_upload":true}}}},{{"step":2,"tool":"confluence_update","params":{{"input_json":"/tmp/releases_ganges-7.6_5.json","branch":"ganges-7.6","type":"PC","force_rebuild":true}}}}]
 
 Now decompose this mission:
 """
@@ -132,9 +165,10 @@ def load_env(path="tools/.env"):
 
 def decompose_mission(mission, cursor_key, verbose=False):
     """Use cursor-sdk Agent.prompt() one-shot to decompose mission into steps."""
-    from cursor_sdk import Agent, AgentOptions, CursorAgentError
-
-    full_prompt = DECOMPOSITION_PROMPT + mission
+    prompt = DECOMPOSITION_PROMPT_TEMPLATE.format(
+        all_branches=", ".join(ALL_BRANCHES),
+    )
+    full_prompt = prompt + mission
 
     if verbose:
         print("[Cursor SDK] Sending mission to Agent.prompt() ...")
@@ -147,6 +181,7 @@ def decompose_mission(mission, cursor_key, verbose=False):
                 model="claude-sonnet-4",
             ),
         )
+        print(f"[Cursor SDK] Agent returned status: {result.status}")
     except CursorAgentError as exc:
         retryable = getattr(exc, "is_retryable", False)
         print(
@@ -208,7 +243,7 @@ def run_release_query(params):
     cmd = [
         sys.executable, "release_query.py",
         "--branch", params.get("branch", "master"),
-        "--count", str(params.get("count", 5)),
+        "--count", str(params.get("count", 1)),
         "--filter", params.get("filter", "all"),
         "--format", params.get("format", "table"),
     ]
@@ -245,13 +280,13 @@ def run_confluence_update(params):
         return {"ok": False, "error": "input_json is required"}
 
     try:
-        from tools.mcp_confluence_client import upload_releases, _get_env
+        
         with open(input_json) as f:
             rows = json.load(f)
 
         release_type = (params.get("type") or "").upper()
         if not release_type:
-            from tools.mcp_confluence_client import detect_release_type
+            
             release_type = detect_release_type(rows)
 
         aos_page_id = _get_env("AOS_CONFLUENCE_PAGE_ID")
@@ -389,35 +424,35 @@ def _extract_discrepancies(stderr):
     return lines
 
 
-import re as _re
+
 
 _STAGE_PATTERNS = [
     ("Releases Extracted",
-     r"\[release-query\] Output: (\d+) rows",
+     r"\[release-query\].*?Output: (\d+) rows",
      lambda m: "%s release(s)" % m.group(1)),
     ("Gerrit Commits",
-     r"\[release-query\] Gerrit: (\d+) commits",
+     r"\[release-query\].*?Gerrit: (\d+) commits",
      lambda m: "%s commit(s)" % m.group(1)),
     ("GitHub Commits",
-     r"\[release-query\] GitHub: (\d+) commits",
+     r"\[release-query\].*?GitHub: (\d+) commits",
      lambda m: "%s commit(s)" % m.group(1)),
     ("CI Status",
-     r"\[release-query\] CI status fetched for (\d+) unique commit",
+     r"\[release-query\].*?CI status fetched for (\d+) unique commit",
      lambda m: "%s commit(s) checked" % m.group(1)),
     ("RPM Download",
-     r"\[release-query\] Downloading (\d+) file",
+     r"\[release-query\].*?Downloading (\d+) file",
      lambda m: "%s file(s) queued" % m.group(1)),
     ("Changelog",
-     r"\[release-query\] Generating changelog",
+     r"\[release-query\].*?Generating changelog",
      lambda m: "generated"),
     ("SFTP Upload",
-     r"\[release-query\] SFTP upload complete: (\d+) file",
+     r"\[release-query\].*?SFTP upload complete: (\d+) file",
      lambda m: "%s file(s) uploaded" % m.group(1)),
     ("Endor Publish",
-     r"\[release-query\] Endor publish complete: (\d+) published, (\d+) already exist, (\d+) failed",
+     r"\[release-query\].*?Endor publish complete: (\d+) published, (\d+) already exist, (\d+) failed",
      lambda m: "%s published, %s exist, %s failed" % (m.group(1), m.group(2), m.group(3))),
     ("Confluence",
-     r"\[release-query\] Confluence upload complete: (\d+) added, (\d+) already exist",
+     r"\[release-query\].*?Confluence upload complete: (\d+) added, (\d+) already exist",
      lambda m: "+%s added, %s skipped" % (m.group(1), m.group(2))),
 ]
 
@@ -432,14 +467,14 @@ def _extract_stage_stats(stderr):
         if m:
             stages.append((label, fmt(m)))
     # Count successful RPM downloads from "Saved" lines
-    saved = len(_re.findall(r"\[release-query\] \[[A-Z]+\] Saved", stderr))
+    saved = len(_re.findall(r"\[release-query\].*?\[[A-Z]+\] Saved", stderr))
     if saved:
         for i, (label, _) in enumerate(stages):
             if label == "RPM Download":
                 stages[i] = ("RPM Download", "%d file(s) downloaded" % saved)
                 break
     # Count changelog files generated
-    changelogs = len(_re.findall(r"\[release-query\] \[[A-Z]+\] changelog", stderr))
+    changelogs = len(_re.findall(r"\[release-query\].*?\[[A-Z]+\] changelog", stderr))
     if changelogs:
         for i, (label, _) in enumerate(stages):
             if label == "Changelog":
@@ -523,8 +558,6 @@ def dispatch_steps(steps, dry_run=False, fail_fast=False, verbose=False):
 
 def print_summary(results):
     """Print final summary with stage status, step results, and discrepancies."""
-    import pandas as pd
-
     # Stage status
     all_stages = []
     for r in results:
@@ -599,7 +632,6 @@ def main():
     # Validate MCP server tokens before running any steps
     if not args.dry_run:
         try:
-            from tools.mcp_client import validate_mcp_tokens
             validate_mcp_tokens()
         except SystemExit:
             raise

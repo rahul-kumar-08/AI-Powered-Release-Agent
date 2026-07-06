@@ -39,19 +39,17 @@ from datetime import datetime
 
 try:
     from tools.mcp_client import call_tool as _mcp_call_tool, _get_env
+    from src.logger import Log
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from mcp_client import call_tool as _mcp_call_tool, _get_env
+    from src.logger import Log
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
 TOOL_PREFIX = "atlassian__"
-
-
-def _log(msg):
-    print(f"[confluence] {msg}", file=sys.stderr, flush=True)
 
 
 def _extract_text(result):
@@ -120,7 +118,7 @@ def create_page(server_key, space_key, title, content, parent_id):
     text = _extract_text(result)
     m = re.search(r'"id"\s*:\s*"?(\d+)"?', text)
     page_id = m.group(1) if m else None
-    _log(f"Created page: {title} (id={page_id})")
+    Log.info(f"Created page: {title} (id={page_id})")
     return page_id
 
 
@@ -212,10 +210,10 @@ def find_target_page(server_key, parent_id, branch, release_type,
     """
     if not space_key:
         space_key = get_space_key(server_key, parent_id)
-        _log(f"Resolved space key: {space_key}")
+        Log.info(f"Resolved space key: {space_key}")
 
     all_pages = _collect_all_pages(server_key, parent_id)
-    _log(f"Discovered {len(all_pages)} pages under parent {parent_id}")
+    Log.info(f"Discovered {len(all_pages)} pages under parent {parent_id}")
 
     branch_ver = _extract_branch_ver(branch)
     rhel_ver = None
@@ -230,14 +228,14 @@ def find_target_page(server_key, parent_id, branch, release_type,
 
     # Build ordered list of candidate title patterns (exact match first).
     patterns = _build_title_patterns(rtype, branch, branch_ver, rhel_ver)
-    _log(f"Matching patterns: {patterns}")
+    Log.info(f"Matching patterns: {patterns}")
 
     # Exact (case-insensitive) match
     for pattern in patterns:
         for page in all_pages:
             if page.get("title", "").lower() == pattern.lower():
                 pid = str(page.get("id", ""))
-                _log(f"Matched page: '{page['title']}' (id={pid})")
+                Log.info(f"Matched page: '{page['title']}' (id={pid})")
                 return pid, page["title"]
 
     # Fuzzy: branch version appears anywhere in title
@@ -246,14 +244,14 @@ def find_target_page(server_key, parent_id, branch, release_type,
             title_lower = page.get("title", "").lower()
             if branch_ver in title_lower:
                 pid = str(page.get("id", ""))
-                _log(f"Fuzzy-matched page: '{page['title']}' (id={pid})")
+                Log.info(f"Fuzzy-matched page: '{page['title']}' (id={pid})")
                 return pid, page["title"]
 
     # No match — create under the best parent
     new_title = _new_page_title(rtype, branch, branch_ver, rhel_ver)
     create_parent = _best_create_parent(
         rtype, branch, rhel_ver, parent_id, all_pages)
-    _log(f"No match found, creating '{new_title}' under {create_parent}")
+    Log.info(f"No match found, creating '{new_title}' under {create_parent}")
     pid = create_page(server_key, space_key, new_title,
                       f"# {new_title}\n\n*(table pending)*", create_parent)
     return pid, new_title
@@ -542,13 +540,13 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
       6. Update the page only if new rows were added (or force_rebuild).
     """
     if not rows:
-        _log("No rows to upload.")
+        Log.info("No rows to upload.")
         return {"added": 0, "skipped": 0, "total": 0}
 
     if not release_type:
         release_type = detect_release_type(rows)
     release_type = release_type.upper()
-    _log(f"Release type: {release_type}, branch: {branch}, incoming rows: {len(rows)}")
+    Log.info(f"Release type: {release_type}, branch: {branch}, incoming rows: {len(rows)}")
 
     page_id, page_title = find_target_page(
         server_key, parent_id, branch, release_type,
@@ -558,7 +556,7 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
 
     page_content = get_page_content(server_key, page_id)
     existing_versions, existing_cells = extract_existing_versions(page_content)
-    _log(f"Existing rows on page: {len(existing_cells)} "
+    Log.info(f"Existing rows on page: {len(existing_cells)} "
          f"({len(existing_versions)} unique versions)")
 
     new_cells = []
@@ -567,15 +565,15 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
         cells = row_to_cells(row)
         ver_normalized = _normalize_version(cells[0])
         if ver_normalized in existing_versions:
-            _log(f"  SKIP (exists): {cells[0]}")
+            Log.info(f"  SKIP (exists): {cells[0]}")
             skipped += 1
             continue
-        _log(f"  ADD (new):     {cells[0]}")
+        Log.info(f"  ADD (new):     {cells[0]}")
         new_cells.append(cells)
         existing_versions.add(ver_normalized)
 
     if not new_cells and not force_rebuild:
-        _log(f"No new rows to add. {skipped} already exist on page.")
+        Log.info(f"No new rows to add. {skipped} already exist on page.")
         return {"added": 0, "skipped": skipped,
                 "total": len(existing_cells), "page_id": page_id}
 
@@ -583,11 +581,11 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
     table_html = build_table_storage(all_cells)
     full_content = f"<h1>{page_title}</h1>\n{table_html}"
 
-    _log(f"Table rebuilt: {len(new_cells)} new + {len(existing_cells)} existing "
+    Log.info(f"Table rebuilt: {len(new_cells)} new + {len(existing_cells)} existing "
          f"= {len(all_cells)} total, sorted by date (newest first)")
 
     if dry_run:
-        _log("DRY RUN — page not updated")
+        Log.info("DRY RUN — page not updated")
         print(full_content)
         return {"added": len(new_cells), "skipped": skipped,
                 "total": len(all_cells), "page_id": page_id, "dry_run": True}
@@ -596,7 +594,7 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
                        if new_cells else "Table rebuild (re-sorted)")
     update_page_storage(server_key, page_id, page_title,
                         full_content, version_comment)
-    _log(f"Updated page '{page_title}' (id={page_id}): "
+    Log.info(f"Updated page '{page_title}' (id={page_id}): "
          f"+{len(new_cells)} rows, {skipped} skipped, {len(all_cells)} total")
 
     return {

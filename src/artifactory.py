@@ -7,7 +7,8 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.config import _log, _get_env, ARTIFACTORY_BASE, ARTIFACTORY_API_STORAGE
+from src.config import _get_env, ARTIFACTORY_BASE, ARTIFACTORY_API_STORAGE
+from src.logger import Log
 
 
 def _extract_build_number(ci_url):
@@ -70,7 +71,7 @@ def _download_one_rpm(url, dest_path, art_token=None):
             f.write(data)
         return dest_path, len(data)
     except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
-        _log(f"  Download failed for {dest_path}: {e}")
+        Log.error(f"Download failed for {dest_path}: {e}")
         return None
 
 
@@ -85,7 +86,7 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
     allowed = allowed_types.get(filter_type, {"AOS", "PC"})
     tasks = []
 
-    _log("Resolving Artifactory RPM URLs...")
+    Log.info("Resolving Artifactory RPM URLs...")
 
     for row in rows:
         version = row.get("goldimage_version", "unknown")
@@ -118,16 +119,16 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
 
     downloaded = []
     if not tasks:
-        _log("No builds to download")
+        Log.info("No builds to download")
         return downloaded
 
-    _log(f"Downloading {len(tasks)} file(s) in parallel...")
+    Log.info(f"Downloading {len(tasks)} file(s) in parallel...")
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         future_map = {}
         for rtype, version, label, url, dest in tasks:
-            _log(f"[{rtype}] {label} build → {os.path.basename(dest)} "
-                 f"(version {version})")
+            Log.info(f"[{rtype}] {label} build → {os.path.basename(dest)} "
+                     f"(version {version})")
             fut = pool.submit(_download_one_rpm, url, dest, art_token)
             future_map[fut] = (rtype, version, label, dest)
 
@@ -138,7 +139,7 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
                 path, size = result
                 downloaded.append({"rtype": rtype, "version": version,
                                    "file": label, "path": path})
-                _log(f"[{rtype}] Saved {os.path.basename(dest)} → "
-                     f"{path} ({size} bytes)")
+                Log.info(f"[{rtype}] Saved {os.path.basename(dest)} → "
+                         f"{path} ({size} bytes)")
 
     return downloaded

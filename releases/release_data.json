@@ -1,0 +1,348 @@
+{
+  "main-ganges-7.6-rhel9.8-11.3.0": {
+    "goldimage_version": "main-ganges-7.6-rhel9.8-11.3.0",
+    "type": "AOS",
+    "main_ticket": "ENG-947559",
+    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.3.0/changelog.txt",
+    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.3.0/rpm.txt",
+    "merge_date": "23-Jun-2026",
+    "github_date": "23-Jun-2026",
+    "sg_date": "23-Jun-2026",
+    "gerrit_date": "2026-06-23T18:38:30.283+0000",
+    "notes": "ganges-7.6",
+    "commit": "5288f9e",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2448",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/548554",
+    "tickets_resolved": [
+      "ENG-946975"
+    ],
+    "associated_prs": [],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.3.0/PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.3.0 (#2448)\n\nTickets Resolved :\nENG-946975  [LCM_MUC_QUAL]  AHV Upgrade failed with \"VmPeerToPeerLiveMigrateError: Failed to setup SSH keys generated on host\"\nTickets Reverted:\nENG-933574 - AOS: New High Risk risk security patch RHEL 9 : openssh (RHSA-2026:19219)\nENG-933582 - AOS: New High Risk risk security patch RHEL 9 : openssl (RHSA-2026:19218)\nENG-941586 - AOS: New High Risk risk security patch RHEL 9 : openssl (RHSA-2026:22312)\nENG-943276 - AOS: New Critical Risk risk security patch RHE... [truncated]",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29106",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-23T17:43:03Z",
+      "updated_at": "2026-06-23T17:43:03Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29105",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-23T17:43:07Z",
+      "updated_at": "2026-06-23T17:43:07Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-946975",
+        "summary": "[LCM_MUC_QUAL] - AHV Upgrade failed with \"VmPeerToPeerLiveMigrateError: Failed to setup SSH keys generated on host\""
+      }
+    ],
+    "main_ticket_summary": "Release gold image main-ganges-7.6-rhel9.8-11.3.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-7.6-rhel9.8-11.2.1",
+      "type": "AOS",
+      "main_ticket": "ENG-946835",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2442",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2441"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29016",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-22T12:56:19Z",
+        "updated_at": "2026-06-22T12:56:19Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29015",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-22T12:56:13Z",
+        "updated_at": "2026-06-22T12:56:13Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  },
+  "main-ganges-pc.7.6-rhel9.8-9.3.0": {
+    "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.3.0",
+    "type": "PC",
+    "main_ticket": "ENG-947561",
+    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.3.0/changelog.txt",
+    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.3.0/rpm.txt",
+    "merge_date": "23-Jun-2026",
+    "github_date": "23-Jun-2026",
+    "sg_date": "23-Jun-2026",
+    "gerrit_date": "2026-06-23T18:38:30.283+0000",
+    "notes": "ganges-7.6",
+    "commit": "5288f9e",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2448",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/548554",
+    "tickets_resolved": [
+      "ENG-946975"
+    ],
+    "associated_prs": [],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.3.0/PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.3.0 (#2448)\n\nTickets Resolved :\nENG-946975  [LCM_MUC_QUAL]  AHV Upgrade failed with \"VmPeerToPeerLiveMigrateError: Failed to setup SSH keys generated on host\"\nTickets Reverted:\nENG-933574 - AOS: New High Risk risk security patch RHEL 9 : openssh (RHSA-2026:19219)\nENG-933582 - AOS: New High Risk risk security patch RHEL 9 : openssl (RHSA-2026:19218)\nENG-941586 - AOS: New High Risk risk security patch RHEL 9 : openssl (RHSA-2026:22312)\nENG-943276 - AOS: New Critical Risk risk security patch RHE... [truncated]",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29106",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-23T17:43:03Z",
+      "updated_at": "2026-06-23T17:43:03Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29105",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-23T17:43:07Z",
+      "updated_at": "2026-06-23T17:43:07Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-946975",
+        "summary": "[LCM_MUC_QUAL] - AHV Upgrade failed with \"VmPeerToPeerLiveMigrateError: Failed to setup SSH keys generated on host\""
+      }
+    ],
+    "main_ticket_summary": "PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.3.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.2.1",
+      "type": "PC",
+      "main_ticket": "ENG-948266",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2442",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2441"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29016",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-22T12:56:19Z",
+        "updated_at": "2026-06-22T12:56:19Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29015",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-22T12:56:13Z",
+        "updated_at": "2026-06-22T12:56:13Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  },
+  "main-ganges-pc.7.6-rhel9.8-9.2.1": {
+    "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.2.1",
+    "type": "PC",
+    "main_ticket": "ENG-948266",
+    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.2.1/changelog.txt",
+    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.2.1/rpm.txt",
+    "merge_date": "23-Jun-2026",
+    "github_date": "22-Jun-2026",
+    "sg_date": "23-Jun-2026",
+    "gerrit_date": "2026-06-23T12:11:35.700+0000",
+    "notes": "ganges-7.6",
+    "commit": "b2f4f4e",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2442",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/547598",
+    "tickets_resolved": [
+      "ENG-941911",
+      "ENG-943255",
+      "ENG-941917",
+      "ENG-941909",
+      "ENG-941920",
+      "ENG-946833"
+    ],
+    "associated_prs": [
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2441"
+    ],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.2.1/PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.2.1 (#2442)\n\nTickets Resolved : ENG-942212, ENG-941586, ENG-943276, ENG-942209, ENG-941584, ENG-941920, ENG-941911, ENG-943255, ENG-941917, ENG-941909\nTarget Release : ganges-7.6",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29016",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-22T12:56:19Z",
+      "updated_at": "2026-06-22T12:56:19Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29015",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-22T12:56:13Z",
+      "updated_at": "2026-06-22T12:56:13Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-941911",
+        "summary": "PC: New High Risk risk security patch RHEL 9 : openssl (RHSA-2026:22312)"
+      },
+      {
+        "key": "ENG-943255",
+        "summary": "PC: New Critical Risk risk security patch RHEL 9 : openssl (RHSA-2026:25239)"
+      },
+      {
+        "key": "ENG-941917",
+        "summary": "PC: New High Risk risk security patch RHEL 9 : bind (RHSA-2026:24367)"
+      },
+      {
+        "key": "ENG-941909",
+        "summary": "PC: New High Risk risk security patch RHEL 9 : vim (RHSA-2026:22717)"
+      },
+      {
+        "key": "ENG-941920",
+        "summary": "PC: New Critical Risk risk security patch RHEL 9 : unbound (RHSA-2026:24369)"
+      },
+      {
+        "key": "ENG-946833",
+        "summary": "PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.2.1"
+      }
+    ],
+    "main_ticket_summary": "PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.2.1",
+    "previous_release": {
+      "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.2.0",
+      "type": "PC",
+      "main_ticket": "ENG-946386",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2436",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2435"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28978",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-21T05:47:05Z",
+        "updated_at": "2026-06-21T05:47:05Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28977",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-21T05:47:26Z",
+        "updated_at": "2026-06-21T05:47:26Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  },
+  "main-ganges-7.6-rhel9.8-11.2.1": {
+    "goldimage_version": "main-ganges-7.6-rhel9.8-11.2.1",
+    "type": "AOS",
+    "main_ticket": "ENG-946835",
+    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.2.1/changelog.txt",
+    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.2.1/rpm.txt",
+    "merge_date": "23-Jun-2026",
+    "github_date": "22-Jun-2026",
+    "sg_date": "23-Jun-2026",
+    "gerrit_date": "2026-06-23T12:11:26.890+0000",
+    "notes": "ganges-7.6",
+    "commit": "b2f4f4e",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2442",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/547597",
+    "tickets_resolved": [
+      "ENG-942212",
+      "ENG-941586",
+      "ENG-943276",
+      "ENG-942209",
+      "ENG-941584",
+      "ENG-946835"
+    ],
+    "associated_prs": [
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2441"
+    ],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.2.1/PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.2.1 (#2442)\n\nTickets Resolved : ENG-942212, ENG-941586, ENG-943276, ENG-942209, ENG-941584, ENG-941920, ENG-941911, ENG-943255, ENG-941917, ENG-941909\nTarget Release : ganges-7.6",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29016",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-22T12:56:19Z",
+      "updated_at": "2026-06-22T12:56:19Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29015",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-22T12:56:13Z",
+      "updated_at": "2026-06-22T12:56:13Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-942212",
+        "summary": "AOS: New Critical Risk risk security patch RHEL 9 : unbound (RHSA-2026:24369)"
+      },
+      {
+        "key": "ENG-941586",
+        "summary": "AOS: New High Risk risk security patch RHEL 9 : openssl (RHSA-2026:22312)"
+      },
+      {
+        "key": "ENG-943276",
+        "summary": "AOS: New Critical Risk risk security patch RHEL 9 : openssl (RHSA-2026:25239)"
+      },
+      {
+        "key": "ENG-942209",
+        "summary": "AOS: New High Risk risk security patch RHEL 9 : bind (RHSA-2026:24367)"
+      },
+      {
+        "key": "ENG-941584",
+        "summary": "AOS: New High Risk risk security patch RHEL 9 : vim (RHSA-2026:22717)"
+      },
+      {
+        "key": "ENG-946835",
+        "summary": "Release gold image main-ganges-7.6-rhel9.8-11.2.1"
+      }
+    ],
+    "main_ticket_summary": "Release gold image main-ganges-7.6-rhel9.8-11.2.1",
+    "previous_release": {
+      "goldimage_version": "main-ganges-7.6-rhel9.8-11.2.0",
+      "type": "AOS",
+      "main_ticket": "ENG-946385",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2436",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2435"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28978",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-21T05:47:05Z",
+        "updated_at": "2026-06-21T05:47:05Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28977",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-21T05:47:26Z",
+        "updated_at": "2026-06-21T05:47:26Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  }
+}

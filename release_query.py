@@ -42,14 +42,25 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
-import urllib.error
-import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from urllib import parse, error
+from urllib.request import urlopen, Request
 
+import pandas as pd
+import paramiko
+
+from src.endor import publish_to_endor, rewrite_urls_to_endor
+from src.formatter import format_table as _fmt
+from src.logger import Log
+from tools.mcp_client import load_mcp_config
 from tools.mcp_client import call_tool as _mcp_call_tool, _get_env, validate_mcp_tokens
-from tools.mcp_sourcegraph_client import TOOL_PREFIX
+from tools.mcp_confluence_client import upload_releases
 from tools.mcp_github_client import fetch_postmerge_ci
+from tools.mcp_sourcegraph_client import TOOL_PREFIX
 
 # ---------------------------------------------------------------------------
 # Configuration (loaded from tools/.env via _get_env)
@@ -71,8 +82,6 @@ ENDOR_PC_MASTER = f"{_BASE}/GoldImages/PC_GoldImages/pc"
 ENDOR_PC_STS_BASE = f"{_BASE}/GoldImages/PC_GoldImages/pc"
 
 
-def _log(msg):
-    print(f"[release-query] {msg}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +150,7 @@ def _print_pipeline_status():
     if os.environ.get("_RELEASE_AGENT_SUBPROCESS"):
         return
 
-    import pandas as pd
+    
     df = pd.DataFrame(stages, columns=["Stage", "Result"])
     print(f"\n{'=' * 26} PIPELINE STATUS {'=' * 26}", file=sys.stderr)
     print(df.to_markdown(index=False, tablefmt="simple"), file=sys.stderr)
@@ -229,11 +238,12 @@ def build_endor_urls(version_str, release_type, branch):
 
 def validate_url(url):
     """HEAD-check a URL, return True if accessible."""
-    req = urllib.request.Request(url, method="HEAD")
+    req = Request(url, method="HEAD")
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urlopen(req, timeout=10) as resp:
             return resp.status == 200
     except Exception:
+        print(f"[release-query] URL not accessible: {url}", file=sys.stderr)
         return False
 
 
@@ -271,14 +281,14 @@ def _sg_stream_search(query, count=50):
         return []
 
     sg_url = _get_env("SOURCEGRAPH_URL", "https://sourcegraph.ntnxdpro.com")
-    import urllib.parse
-    params = urllib.parse.urlencode({"q": f"{query} count:{count}"})
+    
+    params = parse.urlencode({"q": f"{query} count:{count}"})
     url = f"{sg_url}/.api/search/stream?{params}"
 
-    req = urllib.request.Request(url)
+    req = Request(url)
     req.add_header("Authorization", f"token {sg_token}")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urlopen(req, timeout=30) as resp:
             body = resp.read().decode("utf-8")
     except Exception:
         return []
@@ -357,12 +367,12 @@ def _resolve_fix_version_branches(branch):
         return []
 
     url = f"{jira_url}/rest/api/2/project/ENG/versions"
-    req = urllib.request.Request(url)
+    req = Request(url)
     req.add_header("Authorization", f"Bearer {jira_token}")
     req.add_header("Content-Type", "application/json")
 
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urlopen(req, timeout=15) as resp:
             all_versions = json.loads(resp.read())
     except Exception:
         return []
@@ -402,7 +412,7 @@ def _resolve_fix_version_branches(branch):
         branches.append(f"ganges-{ver}-stable-pc")
 
     if branches:
-        _log(f"Resolved fix-version Gerrit branches: {branches}")
+        Log.info(f"Resolved fix-version Gerrit branches: {branches}")
     return branches
 
 
@@ -471,7 +481,7 @@ def fetch_gerrit_releases(server_key, branch, count):
             return all_commits
 
     # Fallback to MCP (messages may be truncated)
-    _log("Streaming API unavailable, falling back to MCP commit_search")
+    Log.info("Streaming API unavailable, falling back to MCP commit_search")
     if branch == "master":
         repos = [DEFAULT_REPO]
         message_terms = ["Release", "gold image", "main-master"]
@@ -638,7 +648,7 @@ def _resolve_jira_token():
     if token:
         return token
     try:
-        from tools.mcp_client import load_mcp_config
+        
         _, headers = load_mcp_config("atlassian")
         token = headers.get("X-Atlassian-Jira-Personal-Token", "")
         if token:
@@ -655,17 +665,16 @@ def _jira_search_rest(jql):
     if not jira_token:
         return None
 
-    import urllib.parse
 
-    params = urllib.parse.urlencode({"jql": jql, "fields": "key,summary", "maxResults": 100})
+    params = parse.urlencode({"jql": jql, "fields": "key,summary", "maxResults": 100})
     url = f"{jira_url}/rest/api/2/search?{params}"
 
-    req = urllib.request.Request(url)
+    req = Request(url)
     req.add_header("Authorization", f"Bearer {jira_token}")
     req.add_header("Content-Type", "application/json")
 
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
     except Exception:
         return None
@@ -774,7 +783,7 @@ def fetch_gerrit_cr_from_jira(ticket_keys, branch):
     jira_token = _resolve_jira_token()
     jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
     if not jira_token:
-        _log("Cannot fetch Gerrit CR: no Jira token available")
+        Log.error("Cannot fetch Gerrit CR: no Jira token available")
         return empty
 
     branch_short = re.sub(r'^ganges-', '', branch)
@@ -786,7 +795,7 @@ def fetch_gerrit_cr_from_jira(ticket_keys, branch):
         # Fallback: search child issues of each EPIC for git-tracker comments
         epic_children = _fetch_epic_children(ticket_keys, jira_url, jira_token)
         if epic_children:
-            _log(f"EPIC has no git-tracker; checking {len(epic_children)} child issue(s)")
+            Log.info(f"EPIC has no git-tracker; checking {len(epic_children)} child issue(s)")
             candidates = _search_git_tracker_comments(
                 epic_children, branch_short, branch, jira_url, jira_token)
 
@@ -808,10 +817,10 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
     for key in ticket_keys:
         try:
             url = f"{jira_url}/rest/api/2/issue/{key}?fields=comment"
-            req = urllib.request.Request(url)
+            req = Request(url)
             req.add_header("Authorization", f"Bearer {jira_token}")
             req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
         except Exception:
             continue
@@ -834,9 +843,11 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
             jira_ver = ver_match.group(1).strip() if ver_match else ""
             gerrit_branch = branch_match.group(1).strip() if branch_match else ""
 
+            is_master = (branch == "master")
             if (branch_short == jira_ver
                     or branch_short == gerrit_branch
                     or branch == gerrit_branch
+                    or (is_master and gerrit_branch == "main")
                     or gerrit_branch.startswith(f"ganges-{branch_short}")
                     or gerrit_branch.startswith(branch)):
                 comment_created = c.get("created", "")
@@ -859,7 +870,6 @@ def _fetch_epic_children(epic_keys, jira_url, jira_token):
 
     Returns a list of child ticket keys (strings).
     """
-    import urllib.parse
 
     children = []
     seen = set()
@@ -870,15 +880,15 @@ def _fetch_epic_children(epic_keys, jira_url, jira_token):
 
         # JQL search for issues with this Epic Link
         jql = f'"Epic Link" = {key}'
-        params = urllib.parse.urlencode({
+        params = parse.urlencode({
             "jql": jql, "fields": "key", "maxResults": 20,
         })
         try:
             url = f"{jira_url}/rest/api/2/search?{params}"
-            req = urllib.request.Request(url)
+            req = Request(url)
             req.add_header("Authorization", f"Bearer {jira_token}")
             req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
             for issue in data.get("issues", []):
                 k = issue.get("key", "")
@@ -891,10 +901,10 @@ def _fetch_epic_children(epic_keys, jira_url, jira_token):
         # Also check issuelinks and subtasks on the EPIC itself
         try:
             url = f"{jira_url}/rest/api/2/issue/{key}?fields=issuelinks,subtasks"
-            req = urllib.request.Request(url)
+            req = Request(url)
             req.add_header("Authorization", f"Bearer {jira_token}")
             req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read())
             for link in data.get("fields", {}).get("issuelinks", []):
                 for direction in ("inwardIssue", "outwardIssue"):
@@ -1317,7 +1327,7 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
         pc_version = pc_validation["confirmed_version"] if pc_validation else None
 
         if not aos_version and not pc_version:
-            _log(f"  Skipping {commit_sha[:8]}: no version confirmed")
+            Log.info(f"  Skipping {commit_sha[:8]}: no version confirmed")
             continue
 
         # Detect mismatches between confirmed version and variables.sh
@@ -1441,9 +1451,9 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
             rows.append(row_data)
 
     if mismatches:
-        _log(f"Version mismatches detected: {len(mismatches)} (heading vs variables.sh)")
+        Log.info(f"Version mismatches detected: {len(mismatches)} (heading vs variables.sh)")
         for mm in mismatches:
-            _log(f"  [{mm['type']}] commit {mm['commit'][:7]}: "
+            Log.info(f"  [{mm['type']}] commit {mm['commit'][:7]}: "
                  f"heading={mm['heading_version']} vs file={mm['file_version']}")
 
     return rows, mismatches
@@ -1517,13 +1527,11 @@ def _is_valid_ticket(ticket):
 
 def format_table(rows, validate_urls=False, with_github_date=False, with_sg_date=False):
     """Format rows as the standard GoldImage release table."""
-    from src.formatter import format_table as _fmt
     _fmt(rows, validate_urls, with_github_date, with_sg_date)
 
 
 def format_markdown(rows, validate_urls=False, with_github_date=False, with_sg_date=False):
     """Format as a cleaner markdown table with linked URLs."""
-    from src.formatter import format_markdown as _fmt
     _fmt(rows, validate_urls, with_github_date, with_sg_date)
 
 
@@ -1581,11 +1589,11 @@ def _resolve_rpm_url(build_num, rtype, art_token=None):
 def _list_build_dir(build_num, art_token=None):
     """List file URIs inside a build-artifacts directory. Returns list of URI strings."""
     dir_url = ARTIFACTORY_API_STORAGE.format(build_num=build_num)
-    req = urllib.request.Request(dir_url)
+    req = Request(dir_url)
     if art_token:
         req.add_header("Authorization", f"Bearer {art_token}")
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
         return [c.get("uri", "") for c in data.get("children", [])]
     except Exception:
@@ -1596,17 +1604,17 @@ def _download_one_rpm(url, dest_path, art_token=None):
     """Download a single rpm.txt file. Returns (dest_path, size) or None."""
     dest_dir = os.path.dirname(dest_path)
     os.makedirs(dest_dir, exist_ok=True)
-    req = urllib.request.Request(url)
+    req = Request(url)
     if art_token:
         req.add_header("Authorization", f"Bearer {art_token}")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urlopen(req, timeout=30) as resp:
             data = resp.read()
         with open(dest_path, "wb") as f:
             f.write(data)
         return dest_path, len(data)
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
-        _log(f"  Download failed for {dest_path}: {e}")
+    except (error.HTTPError, error.URLError, OSError) as e:
+        Log.error(f"Download failed for {dest_path}: {e}")
         return None
 
 
@@ -1639,7 +1647,7 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
     Returns:
         list of dicts: rtype, version, file, path.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
 
     art_token = (_get_env("ARTIFACTORY_TOKEN")
                  or _get_env("ARTIFACTORY_API_KEY"))
@@ -1649,7 +1657,7 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
     allowed = allowed_types.get(filter_type, {"AOS", "PC"})
     tasks = []
 
-    _log("Resolving Artifactory RPM URLs...")
+    Log.info("Resolving Artifactory RPM URLs...")
 
     for row in rows:
         version = row.get("goldimage_version", "unknown")
@@ -1682,15 +1690,15 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
 
     downloaded = []
     if not tasks:
-        _log("No builds to download")
+        Log.info("No builds to download")
         return downloaded
 
-    _log(f"Downloading {len(tasks)} file(s) in parallel...")
+    Log.info(f"Downloading {len(tasks)} file(s) in parallel...")
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         future_map = {}
         for rtype, version, label, url, dest in tasks:
-            _log(f"[{rtype}] {label} build → {os.path.basename(dest)} "
+            Log.info(f"[{rtype}] {label} build → {os.path.basename(dest)} "
                  f"(version {version})")
             fut = pool.submit(_download_one_rpm, url, dest, art_token)
             future_map[fut] = (rtype, version, label, dest)
@@ -1702,7 +1710,7 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
                 path, size = result
                 downloaded.append({"rtype": rtype, "version": version,
                                    "file": label, "path": path})
-                _log(f"[{rtype}] Saved {os.path.basename(dest)} → "
+                Log.info(f"[{rtype}] Saved {os.path.basename(dest)} → "
                      f"{path} ({size} bytes)")
 
     return downloaded
@@ -1796,8 +1804,7 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
         filter_type: "all", "aos", or "pc".
         branch:      GitHub branch name used to match Gerrit CR by branch.
     """
-    import subprocess
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
 
     template = _load_template()
 
@@ -1810,11 +1817,11 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
                 all_ticket_keys.add(key)
     ticket_summaries = {}
     if all_ticket_keys:
-        _log(f"Fetching Jira summaries for {len(all_ticket_keys)} ticket(s)...")
+        Log.info(f"Fetching Jira summaries for {len(all_ticket_keys)} ticket(s)...")
         ticket_summaries = fetch_ticket_summaries(list(all_ticket_keys))
 
     # Fetch Gerrit CR URLs + merged dates from Jira git-tracker comments
-    _log("Fetching Gerrit CR URLs and merged dates from Jira ticket comments...")
+    Log.info("Fetching Gerrit CR URLs and merged dates from Jira ticket comments...")
     cr_cache = {}  # ticket_keys_tuple -> {"cr_url": ..., "merged_date": ...}
 
     def _fetch_cr_for_row(row):
@@ -1893,17 +1900,17 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
                 if diff_output:
                     with open(changelog_path, "a") as f:
                         f.write(diff_output)
-                    _log(f"[{rtype}] changelog.txt: {version} "
+                    Log.info(f"[{rtype}] changelog.txt: {version} "
                          f"({len(diff_output.splitlines())} diff lines)")
                 else:
                     with open(changelog_path, "a") as f:
                         f.write("(no RPM changes)\n")
-                    _log(f"[{rtype}] changelog.txt: {version} "
+                    Log.info(f"[{rtype}] changelog.txt: {version} "
                          f"(no RPM changes)")
             except (subprocess.TimeoutExpired, OSError) as e:
-                _log(f"[{rtype}] diff failed for {version}: {e}")
+                Log.error(f"[{rtype}] diff failed for {version}: {e}")
         else:
-            _log(f"[{rtype}] changelog.txt: {version} "
+            Log.info(f"[{rtype}] changelog.txt: {version} "
                  f"(rpm files missing, skipping diff)")
 
         generated.append({"rtype": rtype, "version": version,
@@ -1951,11 +1958,6 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
     Returns:
         list of dicts with keys: rtype, version, file, remote_path.
     """
-    try:
-        import paramiko
-    except ImportError:
-        _log("SFTP upload skipped: paramiko not installed (pip install paramiko)")
-        return []
 
     host = _get_env("SFTP_HOST")
     username = _get_env("SFTP_USERNAME")
@@ -1964,7 +1966,7 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
     remote_base = _get_env("SFTP_REMOTE_PATH") or _get_env("SFTP_REMOTE_BASE")
 
     if not host or not username:
-        _log("SFTP upload skipped: SFTP_HOST or SFTP_USERNAME not set in .env")
+        Log.error("SFTP upload skipped: SFTP_HOST or SFTP_USERNAME not set in .env")
         return []
 
     transport = None
@@ -2004,10 +2006,10 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
                     "rtype": rtype, "version": version,
                     "file": filename, "remote_path": remote_path,
                 })
-                _log(f"[{rtype}] Uploaded {filename} → sftp://{host}{remote_path}")
+                Log.info(f"[{rtype}] Uploaded {filename} → sftp://{host}{remote_path}")
 
     except Exception as e:
-        _log(f"SFTP upload error: {e}")
+        Log.error(f"SFTP upload error: {e}")
     finally:
         if sftp:
             sftp.close()
@@ -2034,12 +2036,7 @@ def upload_to_confluence(rows, branch, filter_type="all"):
     Returns:
         list of dicts with keys: release_type, added, skipped, total, page_id.
     """
-    try:
-        from tools.mcp_confluence_client import upload_releases
-    except ImportError:
-        _log("Confluence upload skipped: tools.mcp_confluence_client not available")
-        return []
-
+   
     aos_page_id = _get_env("AOS_CONFLUENCE_PAGE_ID")
     pc_page_id = _get_env("PC_CONFLUENCE_PAGE_ID")
     fallback_id = _get_env("CONFLUENCE_PAGE_ID")
@@ -2050,8 +2047,8 @@ def upload_to_confluence(rows, branch, filter_type="all"):
     }
 
     if not any(page_id_map.values()):
-        _log("Confluence upload skipped: no page IDs set in tools/.env "
-             "(need AOS_CONFLUENCE_PAGE_ID / PC_CONFLUENCE_PAGE_ID or CONFLUENCE_PAGE_ID)")
+        Log.error("Confluence upload skipped: no page IDs set in tools/.env "
+                  "(need AOS_CONFLUENCE_PAGE_ID / PC_CONFLUENCE_PAGE_ID or CONFLUENCE_PAGE_ID)")
         return []
 
     types_in_rows = set(r.get("type", "AOS").upper() for r in rows)
@@ -2064,7 +2061,7 @@ def upload_to_confluence(rows, branch, filter_type="all"):
     for rtype in sorted(types_in_rows):
         parent_id = page_id_map.get(rtype)
         if not parent_id:
-            _log(f"[{rtype}] Confluence upload skipped: no page ID configured")
+            Log.error(f"[{rtype}] Confluence upload skipped: no page ID configured")
             continue
         type_rows = [r for r in rows if r.get("type", "AOS").upper() == rtype]
         if not type_rows:
@@ -2081,11 +2078,11 @@ def upload_to_confluence(rows, branch, filter_type="all"):
             )
             result["release_type"] = rtype
             results.append(result)
-            _log(f"[{rtype}] Confluence: +{result.get('added', 0)} rows, "
+            Log.info(f"[{rtype}] Confluence: +{result.get('added', 0)} rows, "
                  f"{result.get('skipped', 0)} skipped, "
                  f"{result.get('total', 0)} total on page {result.get('page_id', '?')}")
         except Exception as e:
-            _log(f"[{rtype}] Confluence upload error: {e}")
+            Log.error(f"[{rtype}] Confluence upload error: {e}")
             results.append({"release_type": rtype, "added": 0, "error": str(e)})
 
     return results
@@ -2098,7 +2095,7 @@ def format_json(rows, output_path=None):
     if output_path:
         with open(output_path, "w") as f:
             f.write(data)
-        _log(f"Saved {len(rows)} releases to: {output_path}")
+        Log.info(f"Saved {len(rows)} releases to: {output_path}")
     else:
         print(data)
 
@@ -2117,8 +2114,6 @@ def _resolve_merge_dates_from_jira(rows, branch):
 
     Updates ``merge_date``, ``sg_date``, and ``gerrit_date`` in place.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     cache = {}
 
     def _lookup(row):
@@ -2141,7 +2136,7 @@ def _resolve_merge_dates_from_jira(rows, branch):
         cache[cache_key] = result
         return ver, result
 
-    _log("Resolving CR merged dates from Jira git-tracker comments...")
+    Log.info("Resolving CR merged dates from Jira git-tracker comments...")
     merged_map = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(_lookup, r): r for r in rows}
@@ -2166,7 +2161,7 @@ def _resolve_merge_dates_from_jira(rows, branch):
                 row["gerrit_cr_url"] = cr_url
             updated += 1
 
-    _log(f"CR merged dates resolved: {updated}/{len(rows)} rows updated from Jira")
+    Log.info(f"CR merged dates resolved: {updated}/{len(rows)} rows updated from Jira")
 
 
 # ---------------------------------------------------------------------------
@@ -2248,24 +2243,24 @@ Examples:
         validate_mcp_tokens(required_servers=required)
 
     # Fetch data
-    _log(f"Fetching releases: branch={args.branch}, count={args.count}, filter={args.filter}")
+    Log.info(f"Fetching releases: branch={args.branch}, count={args.count}, filter={args.filter}")
 
     # Fetch count+1 so the previous release is always available for
     # the last displayed row (needed for previous_release, old_rpm diff, etc.)
     fetch_count = args.count + 1
 
     gerrit_commits = fetch_gerrit_releases(server_key, args.branch, fetch_count)
-    _log(f"Gerrit: {len(gerrit_commits)} commits")
+    Log.info(f"Gerrit: {len(gerrit_commits)} commits")
     _pipeline_stats["gerrit_commits"] = len(gerrit_commits)
 
     github_commits = fetch_github_releases(server_key, args.branch, fetch_count)
-    _log(f"GitHub: {len(github_commits)} commits")
+    Log.info(f"GitHub: {len(github_commits)} commits")
     _pipeline_stats["github_commits"] = len(github_commits)
 
     github_epics = fetch_github_epics(server_key, args.branch)
-    _log(f"GitHub EPICs: {len(github_epics)} releases with Epic field")
+    Log.info(f"GitHub EPICs: {len(github_epics)} releases with Epic field")
 
-    _log("Extracting versions from commit headings + validating against variables.sh...")
+    Log.info("Extracting versions from commit headings + validating against variables.sh...")
     rows, mismatches = parse_releases(
         server_key, github_commits, gerrit_commits, github_epics,
         args.branch, args.filter,
@@ -2279,8 +2274,15 @@ Examples:
     display_count = args.count
     # Always keep all_rows so we can find the previous release per type
     all_rows = rows
-    rows = rows[:display_count]
-    _log(f"Output: {len(rows)} rows")
+    if args.filter == "all":
+        # Per-type slicing: take up to `count` rows from each type (AOS, PC)
+        aos_rows = [r for r in rows if r.get("type", "AOS").upper() == "AOS"][:display_count]
+        pc_rows = [r for r in rows if r.get("type", "AOS").upper() == "PC"][:display_count]
+        rows = aos_rows + pc_rows
+        rows.sort(key=lambda x: x.get("gerrit_date") or x.get("date", ""), reverse=True)
+    else:
+        rows = rows[:display_count]
+    Log.info(f"Output: {len(rows)} rows")
     _pipeline_stats["rows"] = len(rows)
 
     # Add branch as explicit field in every row
@@ -2289,7 +2291,7 @@ Examples:
 
     # Fetch postmerge CI status for all rows (including extras for prev release)
     if args.ci_status:
-        _log("Fetching postmerge CircleCI status from GitHub...")
+        Log.info("Fetching postmerge CircleCI status from GitHub...")
         ci_rows = all_rows
         seen_shas = set()
         for row in ci_rows:
@@ -2309,7 +2311,7 @@ Examples:
             ci = fetch_postmerge_ci(sha)
             row["ci_cvm"] = ci.get("cvm", {})
             row["ci_pcvm"] = ci.get("pcvm", {})
-        _log(f"CI status fetched for {len(seen_shas)} unique commit(s)")
+        Log.info(f"CI status fetched for {len(seen_shas)} unique commit(s)")
         _pipeline_stats["ci_commits"] = len(seen_shas)
         ci_states = []
         for row in all_rows:
@@ -2335,7 +2337,7 @@ Examples:
             all_ticket_keys.add(m.group(1))
     ticket_summaries = {}
     if all_ticket_keys:
-        _log(f"Fetching Jira summaries for {len(all_ticket_keys)} ticket(s)...")
+        Log.info(f"Fetching Jira summaries for {len(all_ticket_keys)} ticket(s)...")
         ticket_summaries = fetch_ticket_summaries(list(all_ticket_keys))
 
     # Embed ticket summaries into each row
@@ -2394,29 +2396,28 @@ Examples:
         downloaded = download_rpm_artifacts(rows, prev_rows, args.rpm_dir,
                                            args.filter)
         for d in downloaded:
-            _log(f"[{d['rtype']}] {d['file']} → {d['path']}")
+            Log.info(f"[{d['rtype']}] {d['file']} → {d['path']}")
         _pipeline_stats["rpm_downloaded"] = len(downloaded)
 
     # Generate changelog.txt if requested (after RPMs are on disk)
     if args.generate_changelog:
-        _log("Generating changelog.txt from template...")
+        Log.info("Generating changelog.txt from template...")
         changelogs = generate_changelog(rows, prev_rows, args.rpm_dir,
                                         args.filter, args.branch)
         for cl in changelogs:
-            _log(f"[{cl['rtype']}] changelog → {cl['path']}")
+            Log.info(f"[{cl['rtype']}] changelog → {cl['path']}")
         _pipeline_stats["changelogs"] = len(changelogs)
 
     # Upload changelog + rpm to SFTP server
     if args.upload_sftp:
-        _log("Uploading files to SFTP server...")
+        Log.info("Uploading files to SFTP server...")
         sftp_results = upload_to_sftp(rows, args.rpm_dir, args.filter)
-        _log(f"SFTP upload complete: {len(sftp_results)} file(s) uploaded")
+        Log.info(f"SFTP upload complete: {len(sftp_results)} file(s) uploaded")
         _pipeline_stats["sftp_uploaded"] = len(sftp_results)
 
     # Publish to endor via Jenkins PUBLISH_GOLD_IMAGE
     if args.publish_endor:
-        from src.endor import publish_to_endor, rewrite_urls_to_endor
-        _log("Publishing to endor via Jenkins...")
+        Log.info("Publishing to endor via Jenkins...")
         endor_results = publish_to_endor(
             rows, args.filter,
             dry_run=False, force=args.force_publish_endor,
@@ -2425,7 +2426,7 @@ Examples:
         skipped = [r for r in endor_results if r.get("skipped")]
         failed = [r for r in endor_results
                   if not r.get("success") and not r.get("skipped") and not r.get("dry_run")]
-        _log(f"Endor publish complete: {len(published)} published, "
+        Log.info(f"Endor publish complete: {len(published)} published, "
              f"{len(skipped)} already exist, {len(failed)} failed")
         _pipeline_stats["endor_published"] = len(published)
         _pipeline_stats["endor_skipped"] = len(skipped)
@@ -2438,11 +2439,11 @@ Examples:
 
     # Upload release table to Confluence
     if args.upload_confluence:
-        _log("Uploading release table to Confluence...")
+        Log.info("Uploading release table to Confluence...")
         confluence_results = upload_to_confluence(rows, args.branch, args.filter)
         total_added = sum(r.get("added", 0) for r in confluence_results)
         total_skipped = sum(r.get("skipped", 0) for r in confluence_results)
-        _log(f"Confluence upload complete: {total_added} added, {total_skipped} already exist")
+        Log.info(f"Confluence upload complete: {total_added} added, {total_skipped} already exist")
         _pipeline_stats["confluence_added"] = total_added
         _pipeline_stats["confluence_skipped"] = total_skipped
     else:
@@ -2474,8 +2475,6 @@ Examples:
             mm for mm in mismatches if mm.get("type", "").lower() == args.filter
         ]
     if filtered_mismatches:
-        import pandas as pd
-        import shutil
         records = []
         for mm in filtered_mismatches:
             source = mm.get("source", "unknown")

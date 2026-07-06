@@ -2,12 +2,15 @@
 
 import json
 import re
+import urllib.parse
 import urllib.request
 
 from src.config import (
-    _log, mcp_call_tool, _get_env,
+    mcp_call_tool, _get_env,
     DEFAULT_REPO, GITHUB_REPO, TOOL_PREFIX,
 )
+from src.jira_client import _resolve_jira_token
+from src.logger import Log
 
 
 def _sg_stream_search(query, count=50):
@@ -21,7 +24,6 @@ def _sg_stream_search(query, count=50):
         return []
 
     sg_url = _get_env("SOURCEGRAPH_URL", "https://sourcegraph.ntnxdpro.com")
-    import urllib.parse
     params = urllib.parse.urlencode({"q": f"{query} count:{count}"})
     url = f"{sg_url}/.api/search/stream?{params}"
 
@@ -97,7 +99,6 @@ def _resolve_fix_version_branches(branch):
         return []
     branch_ver = m.group(1)
 
-    from src.jira_client import _resolve_jira_token
     jira_token = _resolve_jira_token()
     jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
     if not jira_token:
@@ -141,7 +142,7 @@ def _resolve_fix_version_branches(branch):
         branches.append(f"ganges-{ver}-stable-pc")
 
     if branches:
-        _log(f"Resolved fix-version Gerrit branches: {branches}")
+        Log.info(f"Resolved fix-version Gerrit branches: {branches}")
     return branches
 
 
@@ -212,7 +213,7 @@ def fetch_gerrit_releases(server_key, branch, count):
         if all_commits:
             return all_commits
 
-    _log("Streaming API unavailable, falling back to MCP commit_search")
+    Log.info("Streaming API unavailable, falling back to MCP commit_search")
     if branch == "master":
         repos = [DEFAULT_REPO]
         message_terms = ["Release", "gold image", "main-master"]

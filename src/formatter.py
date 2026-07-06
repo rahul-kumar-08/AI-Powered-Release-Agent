@@ -5,7 +5,7 @@ import shutil
 
 import pandas as pd
 
-from src.config import _log
+from src.logger import Log
 from src.version import validate_url
 
 FIXED_COLS = ["GoldImage Version", "Main Ticket", "Merge Date", "Notes"]
@@ -47,7 +47,7 @@ def _compute_maxcolwidths(columns):
 def _build_records(rows, validate_urls_flag, with_github_date, with_sg_date, link_style=False):
     """Build a list of dicts suitable for a DataFrame."""
     if validate_urls_flag:
-        _log("Validating URLs...")
+        Log.info("Validating URLs...")
         for row in rows:
             cl_ok = validate_url(row["changelog_url"])
             rpm_ok = validate_url(row["rpm_url"])
@@ -112,6 +112,6 @@ def format_json(rows, output_path=None):
     if output_path:
         with open(output_path, "w") as f:
             f.write(data)
-        _log(f"Saved {len(rows)} releases to: {output_path}")
+        Log.info(f"Saved {len(rows)} releases to: {output_path}")
     else:
         print(data)

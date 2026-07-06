@@ -5,11 +5,12 @@ import urllib.request
 from datetime import datetime
 
 from src.config import (
-    _log, _get_env,
+    _get_env,
     BASE_URL, GITHUB_REPO,
     ENDOR_AOS_RHEL9_MASTER, ENDOR_AOS_STS_BASE, ENDOR_AOS_RHEL8_BASE,
     ENDOR_PC_MASTER, ENDOR_PC_STS_BASE,
 )
+from src.logger import Log
 
 
 def _parse_rhel8_version(version_str):
@@ -365,7 +366,7 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
         pc_version = pc_validation["confirmed_version"] if pc_validation else None
 
         if not aos_version and not pc_version:
-            _log(f"  Skipping {commit_sha[:8]}: no version in heading")
+            Log.info(f"Skipping {commit_sha[:8]}: no version in heading")
             continue
 
         epic_match = re.search(r"Epic'?s?\s*:\s*(.+?)(?:\n|$)", message, re.IGNORECASE)

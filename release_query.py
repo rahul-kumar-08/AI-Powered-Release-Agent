@@ -2253,7 +2253,7 @@ def _compute_count_from_confluence(branch, filter_type, server_key):
             Log.error(f"  [{rtype}] Confluence lookup error: {e}")
 
     if not confluence_latest:
-        return None, {}
+        return None, {}, set()
 
     # Display existing Confluence releases before running the pipeline
     _display_confluence_releases(confluence_all, branch)
@@ -2266,11 +2266,44 @@ def _compute_count_from_confluence(branch, filter_type, server_key):
     sorted_commits = sorted(
         github_commits, key=lambda x: x.get("date", ""), reverse=True)
 
+    # Extract RHEL versions from recent commits to validate against Confluence
+    _rhel_re = re.compile(r"rhel(\d+\.\d+)")
+    commit_rhel_versions_by_type = {"AOS": set(), "PC": set()}
+    for c in sorted_commits:
+        title = c.get("title", "")
+        if title.startswith("Revert"):
+            continue
+        if not re.match(r"^(Release|PC\s*:)", title, re.IGNORECASE):
+            continue
+        title_clean = re.sub(r"\s*\(#\d+\)$", "", title).strip()
+        h_vers = _extract_heading_versions(title_clean)
+        for t, ver in h_vers.items():
+            if not ver:
+                continue
+            m = _rhel_re.search(ver)
+            if m:
+                commit_rhel_versions_by_type[t.upper()].add(m.group(1))
+
+    MAX_AUTO_COUNT = 10
+
+    skipped_types = set()
     counts_per_type = {}
     for rtype, conf_entry in confluence_latest.items():
         conf_version = conf_entry["version"]
         conf_date_str = conf_entry["merge_date"]
         conf_date = _conf_parse_date(conf_date_str)
+
+        # Validate RHEL version match: skip if Confluence tracks a different RHEL
+        conf_rhel_match = _rhel_re.search(conf_version)
+        if conf_rhel_match:
+            conf_rhel = conf_rhel_match.group(1)
+            current_rhel_set = commit_rhel_versions_by_type.get(rtype, set())
+            if current_rhel_set and conf_rhel not in current_rhel_set:
+                Log.info(f"  [{rtype}] Confluence latest uses rhel{conf_rhel} but "
+                         f"current commits use rhel{sorted(current_rhel_set)} — "
+                         f"skipping (different RHEL version)")
+                skipped_types.add(rtype)
+                continue
 
         # Walk commits, find position of the Confluence latest version
         position = None
@@ -2354,14 +2387,17 @@ def _compute_count_from_confluence(branch, filter_type, server_key):
                          f"{candidate_count} -> {confirmed}")
                 candidate_count = confirmed
 
-        counts_per_type[rtype] = candidate_count
+        counts_per_type[rtype] = min(candidate_count, MAX_AUTO_COUNT)
 
     if not counts_per_type:
-        return None, {}
+        return None, {}, skipped_types
 
     final_count = max(counts_per_type.values())
     Log.info(f"Auto-count result: {final_count} (per-type: {counts_per_type})")
-    return final_count, confluence_latest
+    # Remove skipped types from confluence_latest so they don't appear in display
+    for st in skipped_types:
+        confluence_latest.pop(st, None)
+    return final_count, confluence_latest, skipped_types
 
 
 # ---------------------------------------------------------------------------
@@ -2455,9 +2491,10 @@ Examples:
     # -----------------------------------------------------------------------
     DEFAULT_COUNT = 5
     _confluence_versions = {}  # type -> {"version": ..., "merge_date": ...}
+    _skipped_types = set()  # types with RHEL mismatch (no valid Confluence baseline)
     if args.count is None or args.since_confluence:
         Log.info("Auto-count mode: looking up Confluence for latest entry...")
-        computed, _confluence_versions = _compute_count_from_confluence(
+        computed, _confluence_versions, _skipped_types = _compute_count_from_confluence(
             args.branch, args.filter, server_key)
         if computed is not None and computed >= 0:
             effective_count = computed if computed > 0 else 0
@@ -2529,8 +2566,10 @@ Examples:
     # -----------------------------------------------------------------------
     # Filter out Confluence latest and older releases (auto-count mode only).
     # Only keep rows strictly newer than what's already on Confluence.
+    # Also exclude types with no valid Confluence baseline (RHEL mismatch).
     # -----------------------------------------------------------------------
-    if _confluence_versions:
+    if _confluence_versions or _skipped_types:
+        from tools.mcp_confluence_client import parse_date as _conf_parse_date
 
         conf_versions_set = {v["version"].lower() for v in _confluence_versions.values()}
         conf_dates = {}
@@ -2541,6 +2580,11 @@ Examples:
         for row in rows:
             ver = row.get("goldimage_version", "").lower()
             rtype = row.get("type", "AOS").upper()
+            # Exclude types with no valid Confluence baseline (RHEL mismatch)
+            if rtype in _skipped_types:
+                Log.info(f"  Excluding '{row.get('goldimage_version')}' "
+                         f"({rtype} Confluence page tracks different RHEL version)")
+                continue
             # Exclude if version matches the Confluence latest
             if ver in conf_versions_set:
                 Log.info(f"  Excluding '{row.get('goldimage_version')}' "

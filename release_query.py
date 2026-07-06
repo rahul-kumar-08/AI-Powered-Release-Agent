@@ -61,6 +61,13 @@ from tools.mcp_client import call_tool as _mcp_call_tool, _get_env, validate_mcp
 from tools.mcp_confluence_client import upload_releases
 from tools.mcp_github_client import fetch_postmerge_ci
 from tools.mcp_sourcegraph_client import TOOL_PREFIX
+from tools.mcp_client import load_mcp_config
+from tools.mcp_confluence_client import (
+        get_confluence_page_releases, parse_date as _conf_parse_date,
+    )
+from tools.mcp_confluence_client import TABLE_COLUMNS
+from src.formatter import _compute_maxcolwidths
+
 
 # ---------------------------------------------------------------------------
 # Configuration (loaded from tools/.env via _get_env)
@@ -329,7 +336,7 @@ def _resolve_sg_token():
     if token:
         return token
     try:
-        from tools.mcp_client import load_mcp_config
+        
         _, headers = load_mcp_config("gw-sourcegraph")
         auth = headers.get("Authorization", "")
         if auth.startswith("Bearer "):
@@ -2165,6 +2172,199 @@ def _resolve_merge_dates_from_jira(rows, branch):
 
 
 # ---------------------------------------------------------------------------
+# Confluence Auto-Count Pre-Stage
+# ---------------------------------------------------------------------------
+
+def _display_confluence_releases(confluence_data, branch):
+    """Display the latest Confluence release per type as a pandas DataFrame.
+
+    Shows only one row per type (the newest entry on each page).
+    Columns: Type | Releases | Date | Branch
+    """
+    if not confluence_data:
+        return
+
+    records = []
+    for rtype, page_data in confluence_data.items():
+        latest = page_data.get("latest", {})
+        records.append({
+            "Type": rtype,
+            "Releases": latest.get("version", "N/A"),
+            "Date": latest.get("merge_date", "N/A"),
+            "Branch": branch,
+        })
+
+    if not records:
+        return
+
+    df = pd.DataFrame(records, columns=["Type", "Releases", "Date", "Branch"])
+    print(f"\n{'=' * 22} CONFLUENCE LATEST RELEASES {'=' * 22}", file=sys.stderr)
+    print(df.to_markdown(index=False, tablefmt="simple"), file=sys.stderr)
+    print("-" * 70, file=sys.stderr)
+
+
+
+
+def _compute_count_from_confluence(branch, filter_type, server_key):
+    """Pre-stage: look up Confluence, display existing releases, count newer ones.
+
+    1. Look up Confluence page for branch/type, extract all existing rows
+    2. Display them as a table (Type | Releases | Date | Branch)
+    3. Fetch generous batch of commits (30) from branch
+    4. Version match: find position of Confluence latest in commit list
+    5. Date confirm: verify counted releases have dates newer than Confluence entry
+    6. Return the count, or None if lookup fails
+    """
+
+    aos_page_id = _get_env("AOS_CONFLUENCE_PAGE_ID")
+    pc_page_id = _get_env("PC_CONFLUENCE_PAGE_ID")
+    fallback_id = _get_env("CONFLUENCE_PAGE_ID")
+
+    lookup_types = []
+    if filter_type in ("all", "aos"):
+        lookup_types.append(("AOS", aos_page_id or fallback_id))
+    if filter_type in ("all", "pc"):
+        lookup_types.append(("PC", pc_page_id or fallback_id))
+
+    confluence_latest = {}
+    confluence_all = {}
+    for rtype, parent_id in lookup_types:
+        if not parent_id:
+            Log.info(f"  [{rtype}] No Confluence page ID configured, skipping lookup")
+            continue
+        try:
+            page_data = get_confluence_page_releases(
+                "atlassian", parent_id, branch, rtype)
+            if page_data:
+                latest_entry = dict(page_data["latest"])
+                # Enrich with full row data from the first (newest) row
+                first_row = page_data["rows"][0] if page_data["rows"] else []
+                if len(first_row) > 1:
+                    latest_entry["ticket"] = first_row[1]
+                if len(first_row) > 2:
+                    latest_entry["changelog"] = first_row[2]
+                if len(first_row) > 3:
+                    latest_entry["rpm"] = first_row[3]
+                confluence_latest[rtype] = latest_entry
+                confluence_all[rtype] = page_data
+            else:
+                Log.info(f"  [{rtype}] No existing entries on Confluence")
+        except Exception as e:
+            Log.error(f"  [{rtype}] Confluence lookup error: {e}")
+
+    if not confluence_latest:
+        return None, {}
+
+    # Display existing Confluence releases before running the pipeline
+    _display_confluence_releases(confluence_all, branch)
+
+    # Fetch a generous batch of release commits to scan
+    SCAN_COUNT = 30
+    gerrit_commits = fetch_gerrit_releases(server_key, branch, SCAN_COUNT)
+    github_commits = fetch_github_releases(server_key, branch, SCAN_COUNT)
+
+    sorted_commits = sorted(
+        github_commits, key=lambda x: x.get("date", ""), reverse=True)
+
+    counts_per_type = {}
+    for rtype, conf_entry in confluence_latest.items():
+        conf_version = conf_entry["version"]
+        conf_date_str = conf_entry["merge_date"]
+        conf_date = _conf_parse_date(conf_date_str)
+
+        # Walk commits, find position of the Confluence latest version
+        position = None
+        for idx, c in enumerate(sorted_commits):
+            title = c.get("title", "")
+            if title.startswith("Revert"):
+                continue
+            title_clean = re.sub(r"\s*\(#\d+\)$", "", title).strip()
+            if not re.match(r"^(Release|PC\s*:)", title, re.IGNORECASE):
+                continue
+
+            heading_versions = _extract_heading_versions(title_clean)
+            h_ver = heading_versions.get(rtype.lower())
+            if h_ver and h_ver == conf_version:
+                position = idx
+                break
+
+        if position is not None:
+            # position = index of the Confluence latest in the list;
+            # everything above it (indices 0..position-1) is newer.
+            # This naturally excludes the Confluence latest itself.
+            candidate_count = position
+            Log.info(f"  [{rtype}] Version '{conf_version}' found at position "
+                     f"{position} -> {candidate_count} newer release(s) "
+                     f"(excluding Confluence latest)")
+        else:
+            # Fallback: version not found in commits, use date-only counting.
+            # Only count commits strictly newer than Confluence date (excludes it).
+            Log.info(f"  [{rtype}] Version '{conf_version}' not found in commits, "
+                     f"falling back to date-based counting")
+            if conf_date == datetime.min:
+                Log.info(f"  [{rtype}] No valid Confluence date, cannot determine count")
+                continue
+            candidate_count = 0
+            for c in sorted_commits:
+                title = c.get("title", "")
+                if title.startswith("Revert"):
+                    continue
+                if not re.match(r"^(Release|PC\s*:)", title, re.IGNORECASE):
+                    continue
+                # Extract version to explicitly skip the Confluence latest
+                title_clean = re.sub(r"\s*\(#\d+\)$", "", title).strip()
+                h_vers = _extract_heading_versions(title_clean)
+                h_ver = h_vers.get(rtype.lower())
+                if h_ver and h_ver == conf_version:
+                    break
+                commit_date_str = c.get("date", "")
+                if commit_date_str:
+                    commit_dt = datetime.fromisoformat(
+                        commit_date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                    if commit_dt > conf_date:
+                        candidate_count += 1
+                    else:
+                        break
+            Log.info(f"  [{rtype}] Date-based count: {candidate_count} newer release(s) "
+                     f"(excluding Confluence latest)")
+
+        # Date confirmation: verify counted commits are newer than Confluence date
+        if position is not None and conf_date != datetime.min:
+            confirmed = 0
+            for c in sorted_commits[:position]:
+                title = c.get("title", "")
+                if title.startswith("Revert"):
+                    continue
+                if not re.match(r"^(Release|PC\s*:)", title, re.IGNORECASE):
+                    continue
+                commit_date_str = c.get("date", "")
+                if commit_date_str:
+                    try:
+                        commit_dt = datetime.fromisoformat(
+                            commit_date_str.replace("Z", "+00:00")
+                        ).replace(tzinfo=None)
+                        if commit_dt > conf_date:
+                            confirmed += 1
+                    except (ValueError, AttributeError):
+                        confirmed += 1
+                else:
+                    confirmed += 1
+            if confirmed < candidate_count:
+                Log.info(f"  [{rtype}] Date confirmation trimmed count: "
+                         f"{candidate_count} -> {confirmed}")
+                candidate_count = confirmed
+
+        counts_per_type[rtype] = candidate_count
+
+    if not counts_per_type:
+        return None, {}
+
+    final_count = max(counts_per_type.values())
+    Log.info(f"Auto-count result: {final_count} (per-type: {counts_per_type})")
+    return final_count, confluence_latest
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -2182,7 +2382,13 @@ Examples:
         """,
     )
     parser.add_argument("--branch", default="master", help="Branch (default: master)")
-    parser.add_argument("--count", type=int, default=5, help="Number of releases (default: 5)")
+    parser.add_argument("--count", type=int, default=None,
+                        help="Number of releases. When omitted, auto-determines by "
+                             "looking up Confluence for the latest entry and counting "
+                             "only newer releases since then.")
+    parser.add_argument("--since-confluence", action="store_true",
+                        help="Explicitly trigger Confluence-based auto-count even when "
+                             "--count is provided (implied when --count is omitted).")
     parser.add_argument("--filter", choices=["all", "aos", "pc"], default="all",
                         help="Filter: all, aos, or pc (default: all)")
     parser.add_argument("--format", choices=["table", "markdown", "json"], default="table",
@@ -2242,12 +2448,61 @@ Examples:
             required.append("jenkins")
         validate_mcp_tokens(required_servers=required)
 
+    # -----------------------------------------------------------------------
+    # Pre-stage: Confluence Auto-Count
+    # When --count is omitted (or --since-confluence is set), look up the
+    # latest release on Confluence and count how many newer releases exist.
+    # -----------------------------------------------------------------------
+    DEFAULT_COUNT = 5
+    _confluence_versions = {}  # type -> {"version": ..., "merge_date": ...}
+    if args.count is None or args.since_confluence:
+        Log.info("Auto-count mode: looking up Confluence for latest entry...")
+        computed, _confluence_versions = _compute_count_from_confluence(
+            args.branch, args.filter, server_key)
+        if computed is not None and computed >= 0:
+            effective_count = computed if computed > 0 else 0
+            Log.info(f"Auto-count resolved: {effective_count} new release(s) "
+                     f"since last Confluence update")
+        else:
+            effective_count = DEFAULT_COUNT
+            Log.info(f"Confluence lookup failed or empty — "
+                     f"falling back to default count: {effective_count}")
+    else:
+        effective_count = args.count
+
+    if effective_count == 0:
+        Log.info("No new releases found since last Confluence update — "
+                 "skipping pipeline.")
+        sys.stderr.flush()
+        print(f"\nNo new release found. Latest from Confluence for "
+              f"branch '{args.branch}':")
+        
+        records = []
+        for rtype, entry in _confluence_versions.items():
+            records.append({
+                "GoldImage Version": entry["version"],
+                "Main Ticket": entry.get("ticket", "--"),
+                "Change Log": entry.get("changelog", "--"),
+                "RPM List": entry.get("rpm", "--"),
+                "Merge Date": entry["merge_date"],
+                "Notes": args.branch,
+            })
+        if records:
+            df = pd.DataFrame(records, columns=TABLE_COLUMNS)
+            maxcol = _compute_maxcolwidths(df.columns.tolist())
+            print("\n" + df.to_markdown(index=False, maxcolwidths=maxcol))
+            print(f"\nTotal: {len(records)} release(s) (from Confluence)")
+        _pipeline_stats["rows"] = 0
+        _print_pipeline_status()
+        return
+
     # Fetch data
-    Log.info(f"Fetching releases: branch={args.branch}, count={args.count}, filter={args.filter}")
+    Log.info(f"Fetching releases: branch={args.branch}, count={effective_count}, "
+             f"filter={args.filter}")
 
     # Fetch count+1 so the previous release is always available for
     # the last displayed row (needed for previous_release, old_rpm diff, etc.)
-    fetch_count = args.count + 1
+    fetch_count = effective_count + 1
 
     gerrit_commits = fetch_gerrit_releases(server_key, args.branch, fetch_count)
     Log.info(f"Gerrit: {len(gerrit_commits)} commits")
@@ -2271,7 +2526,69 @@ Examples:
     # on Gerrit; the comment's 'created' timestamp is the actual merge date.
     _resolve_merge_dates_from_jira(rows, args.branch)
 
-    display_count = args.count
+    # -----------------------------------------------------------------------
+    # Filter out Confluence latest and older releases (auto-count mode only).
+    # Only keep rows strictly newer than what's already on Confluence.
+    # -----------------------------------------------------------------------
+    if _confluence_versions:
+
+        conf_versions_set = {v["version"].lower() for v in _confluence_versions.values()}
+        conf_dates = {}
+        for rtype, entry in _confluence_versions.items():
+            conf_dates[rtype] = _conf_parse_date(entry["merge_date"])
+
+        filtered = []
+        for row in rows:
+            ver = row.get("goldimage_version", "").lower()
+            rtype = row.get("type", "AOS").upper()
+            # Exclude if version matches the Confluence latest
+            if ver in conf_versions_set:
+                Log.info(f"  Excluding '{row.get('goldimage_version')}' "
+                         f"(already on Confluence)")
+                continue
+            # Exclude if merge date is older than or equal to Confluence latest
+            conf_dt = conf_dates.get(rtype)
+            if conf_dt and conf_dt != datetime.min:
+                row_date_str = row.get("merge_date", "N/A")
+                row_dt = _conf_parse_date(row_date_str)
+                if row_dt != datetime.min and row_dt <= conf_dt:
+                    Log.info(f"  Excluding '{row.get('goldimage_version')}' "
+                             f"(date {row_date_str} <= Confluence latest)")
+                    continue
+            filtered.append(row)
+
+        if len(filtered) < len(rows):
+            Log.info(f"Filtered: {len(rows)} -> {len(filtered)} rows "
+                     f"(removed Confluence latest and older)")
+        rows = filtered
+
+        # If all rows were filtered out, no new releases — show Confluence latest
+        if not rows:
+            Log.info("No new releases after filtering — showing Confluence latest.")
+            sys.stderr.flush()
+            _pipeline_stats["rows"] = 0
+            _print_pipeline_status()
+            print(f"\nNo new release found. Latest from Confluence for "
+                  f"branch '{args.branch}':")
+            
+            records = []
+            for rtype, entry in _confluence_versions.items():
+                records.append({
+                    "GoldImage Version": entry["version"],
+                    "Main Ticket": entry.get("ticket", "--"),
+                    "Change Log": entry.get("changelog", "--"),
+                    "RPM List": entry.get("rpm", "--"),
+                    "Merge Date": entry["merge_date"],
+                    "Notes": args.branch,
+                })
+            if records:
+                df = pd.DataFrame(records, columns=TABLE_COLUMNS)
+                maxcol = _compute_maxcolwidths(df.columns.tolist())
+                print("\n" + df.to_markdown(index=False, maxcolwidths=maxcol))
+                print(f"\nTotal: {len(records)} release(s) (from Confluence)")
+            return
+
+    display_count = effective_count
     # Always keep all_rows so we can find the previous release per type
     all_rows = rows
     if args.filter == "all":

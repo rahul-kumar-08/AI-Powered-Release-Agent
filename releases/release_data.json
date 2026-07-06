@@ -1,10 +1,159 @@
 {
+  "main-ganges-7.6-rhel9.8-11.4.0": {
+    "goldimage_version": "main-ganges-7.6-rhel9.8-11.4.0",
+    "type": "AOS",
+    "main_ticket": "ENG-950221",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.4.0/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.4.0/rpm.txt",
+    "merge_date": "02-Jul-2026",
+    "github_date": "01-Jul-2026",
+    "sg_date": "02-Jul-2026",
+    "gerrit_date": "2026-07-02T13:36:18.838+0000",
+    "notes": "ganges-7.6",
+    "commit": "39acab1",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2460",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/554282",
+    "tickets_resolved": [
+      "ENG-949752",
+      "ENG-950221"
+    ],
+    "associated_prs": [
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2458"
+    ],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.4.0 / PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.4.0 (#2460)\n\nTickets Resolved : ENG-949752\nEpic : ENG-950221, ENG-950223\nTarget Release : 7.6, pc.7.6",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29166",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-07-01T09:57:54Z",
+      "updated_at": "2026-07-01T09:57:54Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29165",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-07-01T09:59:21Z",
+      "updated_at": "2026-07-01T09:59:21Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-949752",
+        "summary": "nvme_status_check fails with \"Unable to get temperature threshold for NVMe drive\""
+      },
+      {
+        "key": "ENG-950221",
+        "summary": "Release gold image main-ganges-7.6-rhel9.8-11.4.0"
+      }
+    ],
+    "main_ticket_summary": "Release gold image main-ganges-7.6-rhel9.8-11.4.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-7.6-rhel9.8-11.3.0",
+      "type": "AOS",
+      "main_ticket": "ENG-947559",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2448",
+      "associated_prs": [],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29106",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-23T17:43:03Z",
+        "updated_at": "2026-06-23T17:43:03Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29105",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-23T17:43:07Z",
+        "updated_at": "2026-06-23T17:43:07Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  },
+  "main-ganges-pc.7.6-rhel9.8-9.4.0": {
+    "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.4.0",
+    "type": "PC",
+    "main_ticket": "ENG-950223",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.4.0/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.4.0/rpm.txt",
+    "merge_date": "02-Jul-2026",
+    "github_date": "01-Jul-2026",
+    "sg_date": "02-Jul-2026",
+    "gerrit_date": "2026-07-02T13:36:03.214+0000",
+    "notes": "ganges-7.6",
+    "commit": "39acab1",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2460",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/554282",
+    "tickets_resolved": [
+      "ENG-949752"
+    ],
+    "associated_prs": [],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.4.0 / PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.4.0 (#2460)\n\nTickets Resolved : ENG-949752\nEpic : ENG-950221, ENG-950223\nTarget Release : 7.6, pc.7.6",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29166",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-07-01T09:57:54Z",
+      "updated_at": "2026-07-01T09:57:54Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29165",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-07-01T09:59:21Z",
+      "updated_at": "2026-07-01T09:59:21Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-949752",
+        "summary": "nvme_status_check fails with \"Unable to get temperature threshold for NVMe drive\""
+      }
+    ],
+    "main_ticket_summary": "PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.4.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.3.0",
+      "type": "PC",
+      "main_ticket": "ENG-947561",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2448",
+      "associated_prs": [],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29106",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-23T17:43:03Z",
+        "updated_at": "2026-06-23T17:43:03Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29105",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-23T17:43:07Z",
+        "updated_at": "2026-06-23T17:43:07Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  },
   "main-ganges-7.6-rhel9.8-11.3.0": {
     "goldimage_version": "main-ganges-7.6-rhel9.8-11.3.0",
     "type": "AOS",
     "main_ticket": "ENG-947559",
-    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.3.0/changelog.txt",
-    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.3.0/rpm.txt",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.3.0/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.3.0/rpm.txt",
     "merge_date": "23-Jun-2026",
     "github_date": "23-Jun-2026",
     "sg_date": "23-Jun-2026",
@@ -76,8 +225,8 @@
     "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.3.0",
     "type": "PC",
     "main_ticket": "ENG-947561",
-    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.3.0/changelog.txt",
-    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.3.0/rpm.txt",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.3.0/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.3.0/rpm.txt",
     "merge_date": "23-Jun-2026",
     "github_date": "23-Jun-2026",
     "sg_date": "23-Jun-2026",
@@ -149,8 +298,8 @@
     "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.2.1",
     "type": "PC",
     "main_ticket": "ENG-948266",
-    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.2.1/changelog.txt",
-    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.2.1/rpm.txt",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.2.1/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.2.1/rpm.txt",
     "merge_date": "23-Jun-2026",
     "github_date": "22-Jun-2026",
     "sg_date": "23-Jun-2026",
@@ -249,8 +398,8 @@
     "goldimage_version": "main-ganges-7.6-rhel9.8-11.2.1",
     "type": "AOS",
     "main_ticket": "ENG-946835",
-    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.2.1/changelog.txt",
-    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.2.1/rpm.txt",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.2.1/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.2.1/rpm.txt",
     "merge_date": "23-Jun-2026",
     "github_date": "22-Jun-2026",
     "sg_date": "23-Jun-2026",
@@ -342,6 +491,339 @@
         "updated_at": "2026-06-21T05:47:26Z",
         "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
         "creator": "sahayaleenus"
+      }
+    }
+  },
+  "main-ganges-pc.7.6-rhel9.8-9.2.0": {
+    "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.2.0",
+    "type": "PC",
+    "main_ticket": "ENG-946386",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.2.0/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.2.0/rpm.txt",
+    "merge_date": "21-Jun-2026",
+    "github_date": "21-Jun-2026",
+    "sg_date": "21-Jun-2026",
+    "gerrit_date": "2026-06-21T08:28:05.558+0000",
+    "notes": "ganges-7.6",
+    "commit": "b3c9627",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2436",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/547004",
+    "tickets_resolved": [
+      "SMOKE-674",
+      "ENG-946386"
+    ],
+    "associated_prs": [
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2435"
+    ],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.2.0/PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.2.0 (#2436)\n\nTickets Resolved : SMOKE-674, ENG-946385, ENG-946386\nTarget Release : 7.6, pc.7.6",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28978",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-21T05:47:05Z",
+      "updated_at": "2026-06-21T05:47:05Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28977",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-21T05:47:26Z",
+      "updated_at": "2026-06-21T05:47:26Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "SMOKE-674",
+        "summary": "Smoke: 7.5 to 7.6 NOS upgrade got stuck during rolling restart"
+      },
+      {
+        "key": "ENG-946386",
+        "summary": "PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.2.0"
+      }
+    ],
+    "main_ticket_summary": "PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.2.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.1.0",
+      "type": "PC",
+      "main_ticket": "ENG-946172",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2432",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2428",
+        "https://github.com/nutanix-core/aos-goldimage-kernel/commit/a604db22f27e7cabac6f17a7e67783c28005058e"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28957",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-19T15:21:02Z",
+        "updated_at": "2026-06-19T15:21:02Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28958",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-19T15:22:08Z",
+        "updated_at": "2026-06-19T15:22:08Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  },
+  "main-ganges-7.6-rhel9.8-11.2.0": {
+    "goldimage_version": "main-ganges-7.6-rhel9.8-11.2.0",
+    "type": "AOS",
+    "main_ticket": "ENG-946385",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.2.0/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.2.0/rpm.txt",
+    "merge_date": "21-Jun-2026",
+    "github_date": "21-Jun-2026",
+    "sg_date": "21-Jun-2026",
+    "gerrit_date": "2026-06-21T08:27:49.218+0000",
+    "notes": "ganges-7.6",
+    "commit": "b3c9627",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2436",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/547004",
+    "tickets_resolved": [
+      "SMOKE-674",
+      "ENG-946385"
+    ],
+    "associated_prs": [
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2435"
+    ],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.2.0/PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.2.0 (#2436)\n\nTickets Resolved : SMOKE-674, ENG-946385, ENG-946386\nTarget Release : 7.6, pc.7.6",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28978",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-21T05:47:05Z",
+      "updated_at": "2026-06-21T05:47:05Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28977",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-21T05:47:26Z",
+      "updated_at": "2026-06-21T05:47:26Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "SMOKE-674",
+        "summary": "Smoke: 7.5 to 7.6 NOS upgrade got stuck during rolling restart"
+      },
+      {
+        "key": "ENG-946385",
+        "summary": "Release gold image main-ganges-7.6-rhel9.8-11.2.0"
+      }
+    ],
+    "main_ticket_summary": "Release gold image main-ganges-7.6-rhel9.8-11.2.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-7.6-rhel9.8-11.1.0",
+      "type": "AOS",
+      "main_ticket": "ENG-946143",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2432",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2433",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2428",
+        "https://github.com/nutanix-core/aos-goldimage-kernel/pull/526",
+        "https://github.com/nutanix-core/aos-goldimage-kernel/commit/a604db22f27e7cabac6f17a7e67783c28005058e"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28957",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-19T15:21:02Z",
+        "updated_at": "2026-06-19T15:21:02Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28958",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-19T15:22:08Z",
+        "updated_at": "2026-06-19T15:22:08Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  },
+  "main-ganges-pc.7.6-rhel9.8-9.1.0": {
+    "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.1.0",
+    "type": "PC",
+    "main_ticket": "ENG-946172",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.1.0/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-9.1.0/rpm.txt",
+    "merge_date": "20-Jun-2026",
+    "github_date": "19-Jun-2026",
+    "sg_date": "20-Jun-2026",
+    "gerrit_date": "2026-06-20T11:51:55.882+0000",
+    "notes": "ganges-7.6",
+    "commit": "299eef3",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2432",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/546571",
+    "tickets_resolved": [
+      "ENG-946167",
+      "ENG-946172"
+    ],
+    "associated_prs": [
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2428",
+      "https://github.com/nutanix-core/aos-goldimage-kernel/commit/a604db22f27e7cabac6f17a7e67783c28005058e"
+    ],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.1.0/PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.1.0 (#2432)\n\nTickets Resolved : ENG-945341, ENG-940230, ENG-946167, ENG-946143, ENG-946172\nTarget Release : 7.6, pc.7.6",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28957",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-19T15:21:02Z",
+      "updated_at": "2026-06-19T15:21:02Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28958",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-19T15:22:08Z",
+      "updated_at": "2026-06-19T15:22:08Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-946167",
+        "summary": "PC: Latest wolfssl drop is failing to load with the LUKS setup."
+      },
+      {
+        "key": "ENG-946172",
+        "summary": "PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.1.0"
+      }
+    ],
+    "main_ticket_summary": "PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.1.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-pc.7.6-rhel9.8-9.0.0",
+      "type": "PC",
+      "main_ticket": "ENG-943013",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2430",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2423"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28912",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-18T09:00:17Z",
+        "updated_at": "2026-06-18T09:00:17Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "rahul-kumar-08"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28911",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-18T09:01:36Z",
+        "updated_at": "2026-06-18T09:01:36Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "rahul-kumar-08"
+      }
+    }
+  },
+  "main-ganges-7.6-rhel9.8-11.1.0": {
+    "goldimage_version": "main-ganges-7.6-rhel9.8-11.1.0",
+    "type": "AOS",
+    "main_ticket": "ENG-946143",
+    "changelog_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.1.0/changelog.txt",
+    "rpm_url": "https://hoth.corp.nutanix.com/security/rahul_kumar/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-11.1.0/rpm.txt",
+    "merge_date": "20-Jun-2026",
+    "github_date": "19-Jun-2026",
+    "sg_date": "20-Jun-2026",
+    "gerrit_date": "2026-06-20T11:51:33.900+0000",
+    "notes": "ganges-7.6",
+    "commit": "299eef3",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2432",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/546570",
+    "tickets_resolved": [
+      "ENG-945341",
+      "ENG-940230",
+      "ENG-946143"
+    ],
+    "associated_prs": [
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2433",
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2428",
+      "https://github.com/nutanix-core/aos-goldimage-kernel/pull/526",
+      "https://github.com/nutanix-core/aos-goldimage-kernel/commit/a604db22f27e7cabac6f17a7e67783c28005058e"
+    ],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-11.1.0/PC : Release gold image main-ganges-pc.7.6-rhel9.8-9.1.0 (#2432)\n\nTickets Resolved : ENG-945341, ENG-940230, ENG-946167, ENG-946143, ENG-946172\nTarget Release : 7.6, pc.7.6",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28957",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-19T15:21:02Z",
+      "updated_at": "2026-06-19T15:21:02Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28958",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-06-19T15:22:08Z",
+      "updated_at": "2026-06-19T15:22:08Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-945341",
+        "summary": "Latest wolfssl drop is failing to load with the LUKS setup."
+      },
+      {
+        "key": "ENG-940230",
+        "summary": "Update Dell SDC version to 5.1.100.104"
+      },
+      {
+        "key": "ENG-946143",
+        "summary": "Release gold image main-ganges-7.6-rhel9.8-11.1.0"
+      }
+    ],
+    "main_ticket_summary": "Release gold image main-ganges-7.6-rhel9.8-11.1.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-7.6-rhel9.8-11.0.0",
+      "type": "AOS",
+      "main_ticket": "ENG-943011",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2430",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2423"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28912",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-18T09:00:17Z",
+        "updated_at": "2026-06-18T09:00:17Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "rahul-kumar-08"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/28911",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-06-18T09:01:36Z",
+        "updated_at": "2026-06-18T09:01:36Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "rahul-kumar-08"
       }
     }
   }

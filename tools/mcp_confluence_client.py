@@ -37,13 +37,9 @@ import re
 import sys
 from datetime import datetime
 
-try:
-    from tools.mcp_client import call_tool as _mcp_call_tool, _get_env
-    from src.logger import Log
-except ImportError:
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from mcp_client import call_tool as _mcp_call_tool, _get_env
-    from src.logger import Log
+
+from mcp_client import call_tool as _mcp_call_tool, _get_env
+from src.logger import Log
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -509,6 +505,66 @@ def build_table_storage(all_rows_cells):
 
     lines.append("</tbody></table>")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Confluence Lookup — Latest Release
+# ---------------------------------------------------------------------------
+
+def get_confluence_page_releases(server_key, parent_id, branch, release_type,
+                                 space_key=None):
+    """Return all existing release rows from the Confluence page for a branch/type.
+
+    Connects to the target page (auto-routed by branch and release type),
+    reads the existing table, and returns all rows sorted newest-first.
+
+    Returns:
+        {"rows": list of cell-lists, "latest": {"version", "merge_date"},
+         "page_id": str, "page_title": str} or None if page is empty/missing.
+    """
+    release_type = (release_type or "AOS").upper()
+    try:
+        page_id, page_title = find_target_page(
+            server_key, parent_id, branch, release_type,
+            rows=None, space_key=space_key)
+    except Exception as e:
+        Log.error(f"Confluence lookup failed (find_target_page): {e}")
+        return None
+
+    if not page_id:
+        return None
+
+    try:
+        page_content = get_page_content(server_key, page_id)
+    except Exception as e:
+        Log.error(f"Confluence lookup failed (get_page_content): {e}")
+        return None
+
+    existing_versions, existing_rows = extract_existing_versions(page_content)
+    if not existing_rows:
+        Log.info(f"Confluence page '{page_title}' has no existing rows")
+        return None
+
+    existing_rows.sort(
+        key=lambda r: parse_date(r[4] if len(r) > 4 else ""), reverse=True)
+
+    best_row = existing_rows[0]
+    best_date_str = best_row[4].strip() if len(best_row) > 4 else "N/A"
+
+    if parse_date(best_date_str) == datetime.min:
+        Log.info(f"Confluence page '{page_title}': no rows with valid merge dates")
+        return None
+
+    version = best_row[0].strip()
+    Log.info(f"Confluence latest for {release_type}/{branch}: "
+             f"'{version}' (merged {best_date_str}) on page '{page_title}'")
+
+    return {
+        "rows": existing_rows,
+        "latest": {"version": version, "merge_date": best_date_str},
+        "page_id": page_id,
+        "page_title": page_title,
+    }
 
 
 # ---------------------------------------------------------------------------

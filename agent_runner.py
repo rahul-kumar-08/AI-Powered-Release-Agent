@@ -56,7 +56,12 @@ Available tools and their parameters:
    Sourcegraph/GitHub, fetch CircleCI status, download RPMs from Artifactory,
    generate changelogs, upload files to SFTP, and update Confluence.
    All stages run by default; use no_* flags to skip individual stages.
-   params: branch (string, default "master"), count (int, default 5),
+   params: branch (string, default "master"),
+           count (int, OPTIONAL — when omitted the pipeline auto-determines
+                  count by looking up the latest Confluence entry and counting
+                  only newer releases since then),
+           since_confluence (bool, default false — explicitly trigger
+                  Confluence-based auto-count even when count is provided),
            filter (string: "all"|"aos"|"pc", default "all"),
            format (string: "table"|"json"|"markdown", default "table"),
            output (string path, optional — save JSON to file),
@@ -85,7 +90,6 @@ Known branches (in order): {all_branches}
 Rules:
 - Return ONLY a JSON array. No markdown, no explanation, no extra text.
 - Each element: {{"step": N, "tool": "<name>", "params": {{...}}}}
-- Infer defaults: branch="master", count=5 when not specified.
 - A single release_query step handles the full pipeline including Confluence.
 - Do NOT add a separate confluence_update step unless the user explicitly asks
   to force-rebuild or re-upload from existing JSON.
@@ -96,9 +100,17 @@ Rules:
 - If the user says "force", "forcefully", "force update", or "forcefully update",
   set force_publish_endor=true to re-publish even if the version already exists
   on endor.
-- When the user says "last release", "latest release", or "last 1 release"
-  (singular, no number, or the number 1), set count=1. Only use higher counts
-  when a specific number > 1 is stated.
+- COUNT HANDLING (critical):
+  - When the user specifies a number (e.g. "last 5", "3 releases"), set count
+    to that number.
+  - When the user says "last release", "latest release", or "last 1 release"
+    (singular, or the number 1), set count=1.
+  - When the user does NOT specify any count or number (e.g. "give me releases
+    from master", "releases from ganges-7.6"), do NOT include count in params.
+    The pipeline will auto-determine count by looking up Confluence for the
+    latest entry and counting only newer releases.
+  - NEVER default count to 5. Only include count when the user explicitly
+    states a number or says "last"/"latest" (implying 1).
 - When the user says "each branch", "all branches", or "every branch", generate
   one release_query step PER branch from the known branches list above.
   Each step must have a different branch. Number steps sequentially.
@@ -116,7 +128,19 @@ Output:
 
 Mission: "Get releases from ganges-7.5 and update confluence"
 Output:
-[{{"step":1,"tool":"release_query","params":{{"branch":"ganges-7.5","count":5}}}}]
+[{{"step":1,"tool":"release_query","params":{{"branch":"ganges-7.5"}}}}]
+
+Mission: "Give me releases from master"
+Output:
+[{{"step":1,"tool":"release_query","params":{{"branch":"master","no_upload":true}}}}]
+
+Mission: "Releases from ganges-7.6"
+Output:
+[{{"step":1,"tool":"release_query","params":{{"branch":"ganges-7.6","no_upload":true}}}}]
+
+Mission: "Releases from ganges-7.6 and push to confluence"
+Output:
+[{{"step":1,"tool":"release_query","params":{{"branch":"ganges-7.6"}}}}]
 
 Mission: "Last 3 PC releases from master"
 Output:
@@ -243,10 +267,13 @@ def run_release_query(params):
     cmd = [
         sys.executable, "release_query.py",
         "--branch", params.get("branch", "master"),
-        "--count", str(params.get("count", 1)),
         "--filter", params.get("filter", "all"),
         "--format", params.get("format", "table"),
     ]
+    if "count" in params and params["count"] is not None:
+        cmd.extend(["--count", str(params["count"])])
+    if params.get("since_confluence"):
+        cmd.append("--since-confluence")
     output = params.get("output")
     if output:
         cmd.extend(["--output", output])

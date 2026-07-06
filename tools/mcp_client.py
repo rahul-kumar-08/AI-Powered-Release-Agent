@@ -16,10 +16,16 @@ Usage:
 """
 
 import asyncio
+import base64
 import json
 import os
+import re as _re
+import ssl
 import sys
+import urllib.error
+import urllib.request
 
+import pandas as pd
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
@@ -104,8 +110,6 @@ def _strip_json_comments(text):
     return "\n".join(lines)
 
 
-import re as _re
-
 _VAR_PATTERN = _re.compile(r"\$?\{(\w+)\}")
 
 
@@ -145,10 +149,6 @@ def load_mcp_config(server_key):
 # ---------------------------------------------------------------------------
 # Synchronous MCP operations (wraps fastmcp async Client)
 # ---------------------------------------------------------------------------
-
-def _log(msg):
-    print(f"[mcp-client] {msg}", file=sys.stderr, flush=True)
-
 
 def call_tool(server_key, tool_name, arguments):
     """
@@ -200,10 +200,6 @@ async def _async_list_tools(url, headers):
 # ---------------------------------------------------------------------------
 # MCP Token / Server Validation
 # ---------------------------------------------------------------------------
-
-import urllib.request
-import urllib.error
-
 
 def _validate_sourcegraph(headers):
     """Validate Sourcegraph token via the streaming API.
@@ -362,7 +358,6 @@ def _validate_confluence(headers):
 
 def _validate_jenkins(headers=None):
     """Validate Jenkins credentials via the ``/api/json`` endpoint."""
-    import base64
     user = _get_env("JENKINS_USER")
     token = _get_env("JENKINS_TOKEN")
     base = _get_env("JENKINS_BASE")
@@ -376,7 +371,6 @@ def _validate_jenkins(headers=None):
         f"{base.rstrip('/')}/api/json?tree=mode", headers={
             "Authorization": f"Basic {creds}",
         })
-    import ssl
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -429,8 +423,6 @@ def validate_mcp_tokens(required_servers=None, github_org="nutanix-core"):
     Returns:
         dict mapping server key → (ok: bool, message: str).
     """
-    import pandas as pd
-
     results = {}
     critical_failures = []
     validation_rows = []

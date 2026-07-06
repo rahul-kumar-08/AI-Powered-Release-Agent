@@ -57,7 +57,8 @@ AI-Powered-Release-Agent/
 ├── release_query.py              # Main pipeline entry point (run from root)
 ├── agent_runner.py               # Mission decomposition + tool dispatch (cursor-sdk)
 ├── src/                          # Pipeline stage modules
-│   ├── config.py                 # Shared constants, _log(), MCP wrapper
+│   ├── config.py                 # Shared constants, MCP wrapper
+│   ├── logger.py                 # Centralized Log class (info/error with auto caller context)
 │   ├── extract.py                # Sourcegraph + GitHub data fetching
 │   ├── jira_client.py            # Jira EPIC resolution, status filtering, git-tracker
 │   ├── version.py                # Version parsing, validation, row building

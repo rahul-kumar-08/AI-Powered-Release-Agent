@@ -21,14 +21,15 @@ Usage:
 """
 
 import argparse
+import base64
 import json
 import os
-import sys
-import urllib.request
-import urllib.parse
-import urllib.error
-import base64
 import ssl
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_JOB = "tools/PUBLISH_GOLD_IMAGE"
@@ -176,7 +177,6 @@ def resolve_queue_to_build(queue_url, timeout=120, poll_interval=5):
 
     Returns build_number (int) or None if timed out.
     """
-    import time
     api_url = queue_url.rstrip("/") + "/api/json"
     elapsed = 0
     while elapsed < timeout:
@@ -199,7 +199,6 @@ def wait_for_build(job_path, build_number, timeout=600, poll_interval=15):
     Returns a dict with keys: success (bool), result (str), duration (int),
     url (str), error (str or None).
     """
-    import time
     elapsed = 0
     while elapsed < timeout:
         info = get_build_status(job_path, build_number)

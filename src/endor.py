@@ -4,11 +4,15 @@ import re
 import urllib.request
 
 from src.config import (
-    _log, BASE_URL,
+    BASE_URL,
     ENDOR_AOS_RHEL9_MASTER, ENDOR_AOS_STS_BASE, ENDOR_AOS_RHEL8_BASE,
     ENDOR_PC_MASTER, ENDOR_PC_STS_BASE, ENDOR_CACHE_BASE,
 )
+from src.logger import Log
 from src.version import _parse_rhel8_version
+from tools.jenkins_tool import (
+    trigger_build, resolve_queue_to_build, wait_for_build, DEFAULT_JOB,
+)
 
 
 def _build_endor_base_dir(version_str, release_type, branch):
@@ -93,10 +97,6 @@ def rewrite_urls_to_endor(rows, branch):
 
 def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
     """Trigger Jenkins PUBLISH_GOLD_IMAGE for each uploaded release version."""
-    from tools.jenkins_tool import (
-        trigger_build, resolve_queue_to_build, wait_for_build, DEFAULT_JOB,
-    )
-
     allowed = {"aos": {"AOS"}, "pc": {"PC"}, "all": {"AOS", "PC"}}
     allowed_types = allowed.get(filter_type, {"AOS", "PC"})
 
@@ -111,7 +111,7 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
         version = row.get("goldimage_version", "unknown")
         source_url, destination, full_path = _derive_endor_params(row)
         if not source_url or not destination or not full_path:
-            _log(f"[{rtype}] Endor publish skipped for {version}: no valid URL")
+            Log.error(f"[{rtype}] Endor publish skipped for {version}: no valid URL")
             continue
 
         if full_path in seen_versions:
@@ -119,7 +119,7 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
         seen_versions.add(full_path)
 
         if _exists_on_endor(full_path) and not force:
-            _log(f"[{rtype}] Already on endor, skipping: {full_path}")
+            Log.info(f"[{rtype}] Already on endor, skipping: {full_path}")
             results.append({
                 "rtype": rtype, "version": version,
                 "destination": destination, "skipped": True,
@@ -130,11 +130,11 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
         params = {
             "SOURCE_URL": source_url,
             "DESTINATION": destination,
-            "Force_update": force_update,
+            "Force_update": "false",
         }
 
         if dry_run:
-            _log(f"[{rtype}] [DRY RUN] Would publish {version} → {destination}")
+            Log.info(f"[{rtype}] [DRY RUN] Would publish {version} → {destination}")
             results.append({
                 "rtype": rtype, "version": version,
                 "source_url": source_url, "destination": destination,
@@ -142,10 +142,10 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
             })
             continue
 
-        _log(f"[{rtype}] Publishing {version} to endor: {destination}")
+        Log.info(f"[{rtype}] Publishing {version} to endor: {destination}")
         queue_url, msg = trigger_build(DEFAULT_JOB, params)
         if not queue_url:
-            _log(f"[{rtype}] FAILED to trigger build: {msg}")
+            Log.error(f"[{rtype}] FAILED to trigger build: {msg}")
             results.append({
                 "rtype": rtype, "version": version,
                 "source_url": source_url, "destination": destination,
@@ -153,12 +153,12 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
             })
             continue
 
-        _log(f"[{rtype}] Build queued: {queue_url}")
+        Log.info(f"[{rtype}] Build queued: {queue_url}")
 
-        _log(f"[{rtype}] Waiting for build to start...")
+        Log.info(f"[{rtype}] Waiting for build to start...")
         build_number = resolve_queue_to_build(queue_url)
         if not build_number:
-            _log(f"[{rtype}] FAILED: build never started (queue timeout)")
+            Log.error(f"[{rtype}] FAILED: build never started (queue timeout)")
             results.append({
                 "rtype": rtype, "version": version,
                 "source_url": source_url, "destination": destination,
@@ -166,14 +166,14 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
             })
             continue
 
-        _log(f"[{rtype}] Build #{build_number} started, waiting for completion...")
+        Log.info(f"[{rtype}] Build #{build_number} started, waiting for completion...")
 
         build_result = wait_for_build(DEFAULT_JOB, build_number)
         result_str = build_result.get("result", "UNKNOWN")
         duration_s = build_result.get("duration", 0) // 1000
 
         if build_result["success"]:
-            _log(f"[{rtype}] Build #{build_number} SUCCESS ({duration_s}s) — {version}")
+            Log.info(f"[{rtype}] Build #{build_number} SUCCESS ({duration_s}s) — {version}")
             results.append({
                 "rtype": rtype, "version": version,
                 "source_url": source_url, "destination": destination,
@@ -181,8 +181,8 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
                 "duration": duration_s,
             })
         else:
-            _log(f"[{rtype}] Build #{build_number} FAILED: {result_str} — {version}")
-            _log(f"[{rtype}] {build_result.get('error', '')}")
+            Log.error(f"[{rtype}] Build #{build_number} FAILED: {result_str} — {version}")
+            Log.error(f"[{rtype}] {build_result.get('error', '')}")
             results.append({
                 "rtype": rtype, "version": version,
                 "source_url": source_url, "destination": destination,

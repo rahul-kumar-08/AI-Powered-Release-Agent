@@ -2,7 +2,8 @@
 
 import os
 
-from src.config import _log, _get_env, BASE_URL
+from src.config import _get_env, BASE_URL
+from src.logger import Log
 
 
 def _sftp_makedirs(sftp, remote_dir):
@@ -29,7 +30,7 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
     try:
         import paramiko
     except ImportError:
-        _log("SFTP upload skipped: paramiko not installed (pip install paramiko)")
+        Log.error("SFTP upload skipped: paramiko not installed (pip install paramiko)")
         return []
 
     host = _get_env("SFTP_HOST")
@@ -39,7 +40,7 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
     remote_base = _get_env("SFTP_REMOTE_PATH") or _get_env("SFTP_REMOTE_BASE")
 
     if not host or not username:
-        _log("SFTP upload skipped: SFTP_HOST or SFTP_USERNAME not set in .env")
+        Log.error("SFTP upload skipped: SFTP_HOST or SFTP_USERNAME not set in .env")
         return []
 
     transport = None
@@ -79,10 +80,10 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
                     "rtype": rtype, "version": version,
                     "file": filename, "remote_path": remote_path,
                 })
-                _log(f"[{rtype}] Uploaded {filename} → sftp://{host}{remote_path}")
+                Log.info(f"[{rtype}] Uploaded {filename} → sftp://{host}{remote_path}")
 
     except Exception as e:
-        _log(f"SFTP upload error: {e}")
+        Log.error(f"SFTP upload error: {e}")
     finally:
         if sftp:
             sftp.close()

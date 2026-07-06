@@ -45,9 +45,11 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 try:
     from tools.mcp_client import _get_env
+    from src.logger import Log
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from mcp_client import _get_env
+    from src.logger import Log
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -65,8 +67,6 @@ _MCP_JSON_PATHS = [
 ]
 
 
-def _log(msg):
-    print(f"[github-mcp] {msg}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +276,7 @@ def _github_rest_get(path, token=None):
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read())
     except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
-        _log(f"REST API error for {path}: {e}")
+        Log.error(f"REST API error for {path}: {e}")
         return None
 
 

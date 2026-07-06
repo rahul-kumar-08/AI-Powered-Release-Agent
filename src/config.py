@@ -5,6 +5,11 @@ import sys
 from tools.mcp_client import call_tool as _mcp_call_tool, _get_env
 from tools.mcp_sourcegraph_client import TOOL_PREFIX
 from tools.mcp_github_client import fetch_postmerge_ci  # noqa: F401 — re-exported
+from src.logger import Log  # noqa: F401 — re-exported for convenience
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 DEFAULT_SERVER_KEY = "gw-sourcegraph"
 
@@ -21,10 +26,6 @@ ENDOR_PC_MASTER = "GoldImages/PC_GoldImages/pc"
 ENDOR_PC_STS_BASE = "GoldImages/PC_GoldImages/pc"
 
 ENDOR_CACHE_BASE = "https://endor-cache-2.corp.nutanix.com/GoldImages"
-
-
-def _log(msg):
-    print(f"[release-query] {msg}", file=sys.stderr, flush=True)
 
 
 def mcp_call_tool(server_key, tool_name, params):

@@ -5,7 +5,8 @@ import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.config import _log, GITHUB_REPO
+from src.config import GITHUB_REPO
+from src.logger import Log
 from src.jira_client import fetch_ticket_summaries, fetch_gerrit_cr_from_jira
 from src.artifactory import _extract_build_number
 
@@ -84,10 +85,10 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
                 all_ticket_keys.add(key)
     ticket_summaries = {}
     if all_ticket_keys:
-        _log(f"Fetching Jira summaries for {len(all_ticket_keys)} ticket(s)...")
+        Log.info(f"Fetching Jira summaries for {len(all_ticket_keys)} ticket(s)...")
         ticket_summaries = fetch_ticket_summaries(list(all_ticket_keys))
 
-    _log("Fetching Gerrit CR URLs and merged dates from Jira ticket comments...")
+    Log.info("Fetching Gerrit CR URLs and merged dates from Jira ticket comments...")
     cr_cache = {}
 
     def _fetch_cr_for_row(row):
@@ -163,18 +164,18 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
                 if diff_output:
                     with open(changelog_path, "a") as f:
                         f.write(diff_output)
-                    _log(f"[{rtype}] changelog.txt: {version} "
-                         f"({len(diff_output.splitlines())} diff lines)")
+                    Log.info(f"[{rtype}] changelog.txt: {version} "
+                             f"({len(diff_output.splitlines())} diff lines)")
                 else:
                     with open(changelog_path, "a") as f:
                         f.write("(no RPM changes)\n")
-                    _log(f"[{rtype}] changelog.txt: {version} "
-                         f"(no RPM changes)")
+                    Log.info(f"[{rtype}] changelog.txt: {version} "
+                             f"(no RPM changes)")
             except (subprocess.TimeoutExpired, OSError) as e:
-                _log(f"[{rtype}] diff failed for {version}: {e}")
+                Log.error(f"[{rtype}] diff failed for {version}: {e}")
         else:
-            _log(f"[{rtype}] changelog.txt: {version} "
-                 f"(rpm files missing, skipping diff)")
+            Log.info(f"[{rtype}] changelog.txt: {version} "
+                     f"(rpm files missing, skipping diff)")
 
         generated.append({"rtype": rtype, "version": version,
                           "path": changelog_path})

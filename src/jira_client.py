@@ -2,10 +2,12 @@
 
 import json
 import re
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.config import _log, mcp_call_tool, _get_env
+from src.config import mcp_call_tool, _get_env
+from src.logger import Log
 
 
 def _resolve_jira_token():
@@ -30,8 +32,6 @@ def _jira_search_rest(jql):
     jira_token = _resolve_jira_token()
     if not jira_token:
         return None
-
-    import urllib.parse
 
     params = urllib.parse.urlencode({"jql": jql, "fields": "key,summary,status", "maxResults": 100})
     url = f"{jira_url}/rest/api/2/search?{params}"
@@ -178,8 +178,6 @@ def fetch_epic_statuses(ticket_keys):
     if not jira_token:
         return {}
 
-    import urllib.parse
-
     keys_jql = ", ".join(valid_keys)
     jql = f'key in ({keys_jql})'
     params = urllib.parse.urlencode({
@@ -238,7 +236,7 @@ def fetch_gerrit_cr_from_jira(ticket_keys, branch):
     jira_token = _resolve_jira_token()
     jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
     if not jira_token:
-        _log("Cannot fetch Gerrit CR: no Jira token available")
+        Log.error("Cannot fetch Gerrit CR: no Jira token available")
         return empty
 
     branch_short = re.sub(r'^ganges-', '', branch)
@@ -249,7 +247,7 @@ def fetch_gerrit_cr_from_jira(ticket_keys, branch):
     if not candidates:
         epic_children = _fetch_epic_children(ticket_keys, jira_url, jira_token)
         if epic_children:
-            _log(f"EPIC has no git-tracker; checking {len(epic_children)} child issue(s)")
+            Log.info(f"EPIC has no git-tracker; checking {len(epic_children)} child issue(s)")
             candidates = _search_git_tracker_comments(
                 epic_children, branch_short, branch, jira_url, jira_token)
 
@@ -312,8 +310,6 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
 
 def _fetch_epic_children(epic_keys, jira_url, jira_token):
     """Fetch child issue keys of one or more EPIC tickets."""
-    import urllib.parse
-
     children = []
     seen = set()
 
@@ -441,7 +437,7 @@ def resolve_merge_dates_from_jira(rows, branch):
         cache[cache_key] = result
         return ver, result
 
-    _log("Resolving CR merged dates from Jira git-tracker comments...")
+    Log.info("Resolving CR merged dates from Jira git-tracker comments...")
     merged_map = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(_lookup, r): r for r in rows}
@@ -466,4 +462,4 @@ def resolve_merge_dates_from_jira(rows, branch):
                 row["gerrit_cr_url"] = cr_url
             updated += 1
 
-    _log(f"CR merged dates resolved: {updated}/{len(rows)} rows updated from Jira")
+    Log.info(f"CR merged dates resolved: {updated}/{len(rows)} rows updated from Jira")

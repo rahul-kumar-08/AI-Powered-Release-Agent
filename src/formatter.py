@@ -56,6 +56,13 @@ def _build_records(rows, validate_urls_flag, with_github_date, with_sg_date, lin
             if not rpm_ok:
                 row["rpm_url"] = "" if link_style else "Data not found"
 
+    types_present = {r.get("type", "AOS").upper() for r in rows}
+    # Tag types when mixed OR when version name doesn't clearly indicate the type
+    tag_types = len(types_present) > 1 or any(
+        r.get("type", "AOS").upper() == "PC" and "-pc" not in r.get("goldimage_version", "").lower()
+        for r in rows
+    )
+
     records = []
     for row in rows:
         if link_style:
@@ -64,8 +71,12 @@ def _build_records(rows, validate_urls_flag, with_github_date, with_sg_date, lin
         else:
             cl = row["changelog_url"]
             rpm = row["rpm_url"]
+        version_display = row["goldimage_version"]
+        if tag_types:
+            rtype = row.get("type", "AOS").upper()
+            version_display = f"{version_display} ({rtype})"
         rec = {
-            "GoldImage Version": row["goldimage_version"],
+            "GoldImage Version": version_display,
             "Main Ticket": row["main_ticket"],
             "Change Log": cl,
             "RPM List": rpm,

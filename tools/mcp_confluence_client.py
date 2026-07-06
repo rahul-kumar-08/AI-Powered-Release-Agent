@@ -37,9 +37,13 @@ import re
 import sys
 from datetime import datetime
 
-
-from mcp_client import call_tool as _mcp_call_tool, _get_env
-from src.logger import Log
+try:
+    from tools.mcp_client import call_tool as _mcp_call_tool, _get_env
+    from src.logger import Log
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from mcp_client import call_tool as _mcp_call_tool, _get_env
+    from src.logger import Log
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -270,6 +274,11 @@ def _build_title_patterns(rtype, branch, branch_ver, rhel_ver):
                 patterns.append(f"Master-RHEL{rhel_ver}")
                 for minor in range(10, -1, -1):
                     patterns.append(f"Master-RHEL{rhel_ver}.{minor}")
+            else:
+                # No rhel_ver available (auto-count mode) — try EL9 variants first
+                for minor in range(10, -1, -1):
+                    patterns.append(f"Master-RHEL9.{minor}")
+                patterns.append("Master-RHEL9")
             patterns.append("Master - PC")
         elif branch_ver:
             patterns.append(f"PC.{branch_ver}")
@@ -343,6 +352,40 @@ def parse_date(date_str):
         except ValueError:
             continue
     return datetime.min
+
+
+def _detect_date_column(rows, sample_size=5):
+    """Scan rows to find the column index that contains date values."""
+    for col_idx in range(max(len(r) for r in rows[:sample_size])):
+        hits = 0
+        for row in rows[:sample_size]:
+            if col_idx < len(row):
+                if parse_date(row[col_idx].strip()) != datetime.min:
+                    hits += 1
+        if hits >= min(2, len(rows[:sample_size])):
+            return col_idx
+    return None
+
+
+_VERSION_PATTERN = re.compile(r"(?:main|sts)-\S+-rhel\d+\.\d+-\S+")
+
+
+def _extract_version_from_row(row):
+    """Extract version string from a row, checking each cell for the pattern."""
+    # First try index 0 directly (standard format)
+    if row and row[0].strip():
+        cell0 = row[0].strip()
+        m = _VERSION_PATTERN.search(cell0)
+        if m:
+            return m.group(0)
+        if cell0.startswith(("main-", "sts-")):
+            return cell0
+    # Scan all cells for the version pattern
+    for cell in row:
+        m = _VERSION_PATTERN.search(cell)
+        if m:
+            return m.group(0)
+    return None
 
 
 def _clean_ticket_cell(cell):
@@ -545,17 +588,29 @@ def get_confluence_page_releases(server_key, parent_id, branch, release_type,
         Log.info(f"Confluence page '{page_title}' has no existing rows")
         return None
 
+    # Detect the date column index dynamically by scanning the first few rows
+    date_col_idx = _detect_date_column(existing_rows)
+    if date_col_idx is None:
+        Log.info(f"Confluence page '{page_title}': no rows with valid merge dates")
+        return None
+
     existing_rows.sort(
-        key=lambda r: parse_date(r[4] if len(r) > 4 else ""), reverse=True)
+        key=lambda r: parse_date(r[date_col_idx] if len(r) > date_col_idx else ""),
+        reverse=True)
 
     best_row = existing_rows[0]
-    best_date_str = best_row[4].strip() if len(best_row) > 4 else "N/A"
+    best_date_str = best_row[date_col_idx].strip() if len(best_row) > date_col_idx else "N/A"
 
     if parse_date(best_date_str) == datetime.min:
         Log.info(f"Confluence page '{page_title}': no rows with valid merge dates")
         return None
 
-    version = best_row[0].strip()
+    # Detect version: try index 0 first, otherwise scan for version pattern
+    version = _extract_version_from_row(best_row)
+    if not version:
+        Log.info(f"Confluence page '{page_title}': cannot extract version from rows")
+        return None
+
     Log.info(f"Confluence latest for {release_type}/{branch}: "
              f"'{version}' (merged {best_date_str}) on page '{page_title}'")
 
@@ -564,6 +619,7 @@ def get_confluence_page_releases(server_key, parent_id, branch, release_type,
         "latest": {"version": version, "merge_date": best_date_str},
         "page_id": page_id,
         "page_title": page_title,
+        "_date_col_idx": date_col_idx,
     }
 
 

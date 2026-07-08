@@ -11,6 +11,14 @@ from src.config import (
     ENDOR_PC_MASTER, ENDOR_PC_STS_BASE,
 )
 from src.logger import Log
+from src.jira_client import search_jira_epic, validate_version_with_jira
+
+PC_TARBALL_BRANCHES = {"ganges-7.3", "ganges-7.5"}
+
+
+def _needs_gi_tarball(branch, release_type):
+    """GI tarball only applies to PC on ganges-7.3 and ganges-7.5."""
+    return branch in PC_TARBALL_BRANCHES and release_type.lower() == "pc"
 
 
 def _parse_rhel8_version(version_str):
@@ -69,10 +77,15 @@ def build_endor_urls(version_str, release_type, branch):
     else:
         base_dir = f"{BASE_URL}{ENDOR_AOS_RHEL9_MASTER}/{version_str}"
 
-    return {
+    urls = {
         "changelog": f"{base_dir}/changelog.txt",
         "rpm": f"{base_dir}/rpm.txt",
     }
+
+    if _needs_gi_tarball(branch, release_type):
+        urls["gi_tarball"] = f"{base_dir}/pcvm.tar.xz"
+
+    return urls
 
 
 def validate_url(url):
@@ -278,7 +291,6 @@ def _resolve_epic(rtype, gerrit_epics, gh_epics, version, message, is_combined):
     2. Jira EPIC search (using raw VERSION_GI)
     3. Tickets Resolved first relevant ticket
     """
-    from src.jira_client import search_jira_epic
 
     if gh_epics:
         if is_combined and len(gh_epics) >= 2:
@@ -311,7 +323,7 @@ def _resolve_epic(rtype, gerrit_epics, gh_epics, version, message, is_combined):
 
 def parse_releases(server_key, github_commits, gerrit_commits, github_epics, branch, filter_type):
     """Parse release commits using CR commit heading as the sole source of truth for GoldImage Version."""
-    from src.jira_client import validate_version_with_jira
+    
 
     reverted_titles = set()
     remerged_titles = set()
@@ -443,6 +455,8 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
                 "notes": branch,
                 "commit": commit_sha,
             }
+            if urls.get("gi_tarball"):
+                row_data["gi_tarball_url"] = urls["gi_tarball"]
             row_data.update(_pc_extra)
             rows.append(row_data)
 

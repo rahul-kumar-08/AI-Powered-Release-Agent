@@ -82,6 +82,9 @@ def _exists_on_endor(destination):
         return False
 
 
+PC_TARBALL_BRANCHES = {"ganges-7.3", "ganges-7.5"}
+
+
 def rewrite_urls_to_endor(rows, branch):
     """Rewrite changelog_url and rpm_url in each row to point to endor-cache-2."""
     for row in rows:
@@ -93,6 +96,8 @@ def rewrite_urls_to_endor(rows, branch):
         endor_base = f"{ENDOR_CACHE_BASE}/{full_path}"
         row["changelog_url"] = f"{endor_base}/changelog.txt"
         row["rpm_url"] = f"{endor_base}/rpm.txt"
+        if branch in PC_TARBALL_BRANCHES and rtype == "pc":
+            row["gi_tarball_url"] = f"{endor_base}/pcvm.tar.xz"
 
 
 def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):

@@ -9,7 +9,7 @@ from src.logger import Log
 from src.version import validate_url
 
 FIXED_COLS = ["GoldImage Version", "Main Ticket", "Merge Date", "Notes"]
-URL_COLS = ["Change Log", "RPM List"]
+URL_COLS = ["Change Log", "RPM List", "GI tarball"]
 
 
 def _terminal_width():
@@ -63,6 +63,8 @@ def _build_records(rows, validate_urls_flag, with_github_date, with_sg_date, lin
         for r in rows
     )
 
+    has_tarball = any(row.get("gi_tarball_url") for row in rows)
+
     records = []
     for row in rows:
         if link_style:
@@ -80,8 +82,15 @@ def _build_records(rows, validate_urls_flag, with_github_date, with_sg_date, lin
             "Main Ticket": row["main_ticket"],
             "Change Log": cl,
             "RPM List": rpm,
-            "Merge Date": row["merge_date"],
         }
+        if has_tarball:
+            tarball_url = row.get("gi_tarball_url", "")
+            if link_style:
+                rec["GI tarball"] = (f"[pcvm.tar.xz]({tarball_url})"
+                                     if tarball_url else "Data not found")
+            else:
+                rec["GI tarball"] = tarball_url or "Data not found"
+        rec["Merge Date"] = row["merge_date"]
         if with_github_date:
             rec["PR Merge Date"] = row.get("github_date", "N/A")
         if with_sg_date:

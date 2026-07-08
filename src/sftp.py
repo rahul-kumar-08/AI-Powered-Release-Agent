@@ -4,6 +4,7 @@ import os
 
 from src.config import _get_env, BASE_URL
 from src.logger import Log
+import paramiko
 
 
 def _sftp_makedirs(sftp, remote_dir):
@@ -27,11 +28,6 @@ def _sftp_makedirs(sftp, remote_dir):
 
 def upload_to_sftp(rows, output_dir, filter_type="all"):
     """Upload generated changelog.txt and rpm.txt to the SFTP server."""
-    try:
-        import paramiko
-    except ImportError:
-        Log.error("SFTP upload skipped: paramiko not installed (pip install paramiko)")
-        return []
 
     host = _get_env("SFTP_HOST")
     username = _get_env("SFTP_USERNAME")
@@ -56,14 +52,23 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
             version = row.get("goldimage_version", "unknown")
             rtype = row.get("type", "AOS")
 
-            for filename, url_key in [("changelog.txt", "changelog_url"),
-                                      ("rpm.txt", "rpm_url")]:
+            file_pairs = [
+                ("changelog.txt", "changelog_url"),
+                ("rpm.txt", "rpm_url"),
+            ]
+            if row.get("gi_tarball_url"):
+                file_pairs.append(("pcvm.tar.xz", "gi_tarball_url"))
+
+            for filename, url_key in file_pairs:
                 url = row.get(url_key, "")
                 if not url or url == "Data not found":
                     continue
 
                 local_path = os.path.join(output_dir, version, rtype, filename)
                 if not os.path.isfile(local_path):
+                    if filename == "pcvm.tar.xz":
+                        Log.error(f"[{rtype}] {filename} not found locally at "
+                                  f"{local_path} — Artifactory download may have failed")
                     continue
 
                 relative = url.replace(BASE_URL, "").lstrip("/")

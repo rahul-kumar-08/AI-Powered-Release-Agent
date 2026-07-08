@@ -327,6 +327,18 @@ TABLE_COLUMNS = [
     "GoldImage Version", "Main Ticket", "Change Log", "RPM List", "Merge Date", "Notes"
 ]
 
+TABLE_COLUMNS_WITH_TARBALL = [
+    "GoldImage Version", "Main Ticket", "Change Log", "RPM List",
+    "GI tarball", "Merge Date", "Notes"
+]
+
+PC_TARBALL_BRANCHES = {"ganges-7.3", "ganges-7.5"}
+
+
+def _needs_gi_tarball(branch, release_type):
+    """GI tarball column only applies to PC on ganges-7.3 and ganges-7.5."""
+    return branch in PC_TARBALL_BRANCHES and release_type.upper() == "PC"
+
 
 def _normalize_version(ver):
     """Normalize a version string for dedup comparison.
@@ -448,7 +460,7 @@ def extract_existing_versions(page_content):
         # e.g. "Jiraissuekey,...,resolution<UUID>ENG-123456"
         cells[1] = _clean_ticket_cell(cells[1])
         # Clean URL cells: strip markdown link syntax <url> and escapes
-        for i in (2, 3):
+        for i in (2, 3, 4):
             if i < len(cells):
                 cells[i] = _clean_url_cell(cells[i])
         ver = cells[0].strip()
@@ -488,7 +500,7 @@ def _strip_html(text):
     return clean.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").strip()
 
 
-def row_to_cells(row):
+def row_to_cells(row, include_tarball=False):
     ver = row.get("goldimage_version", row.get("ver", ""))
     ticket = row.get("main_ticket", row.get("ticket", "--"))
     cl_url = row.get("changelog_url", row.get("cl", ""))
@@ -498,6 +510,12 @@ def row_to_cells(row):
 
     cl_cell = cl_url if cl_url and "not found" not in cl_url.lower() else "Data not found"
     rpm_cell = rpm_url if rpm_url and "not found" not in rpm_url.lower() else "Data not found"
+
+    if include_tarball:
+        tarball_url = row.get("gi_tarball_url", row.get("gi_tarball", ""))
+        tarball_cell = (tarball_url if tarball_url and "not found" not in tarball_url.lower()
+                        else "Data not found")
+        return [ver, ticket, cl_cell, rpm_cell, tarball_cell, merge_date, notes]
 
     return [ver, ticket, cl_cell, rpm_cell, merge_date, notes]
 
@@ -528,12 +546,18 @@ def _build_td(content, is_ticket=False, is_url=False):
     return f"<td>{_escape_html(str(content))}</td>"
 
 
-def build_table_storage(all_rows_cells):
+def build_table_storage(all_rows_cells, include_tarball=False):
     """Build a Confluence storage-format (XHTML) table with Jira Issue macros for tickets."""
-    all_rows_cells.sort(key=lambda r: parse_date(r[4] if len(r) > 4 else ""), reverse=True)
+    columns = TABLE_COLUMNS_WITH_TARBALL if include_tarball else TABLE_COLUMNS
+    date_col_idx = 5 if include_tarball else 4
+    url_cols = {2, 3, 4} if include_tarball else {2, 3}
+
+    all_rows_cells.sort(
+        key=lambda r: parse_date(r[date_col_idx] if len(r) > date_col_idx else ""),
+        reverse=True)
 
     lines = ['<table>', '<thead>', '<tr>']
-    for col in TABLE_COLUMNS:
+    for col in columns:
         lines.append(f"<th>{_escape_html(col)}</th>")
     lines.append("</tr></thead>")
     lines.append("<tbody>")
@@ -542,7 +566,7 @@ def build_table_storage(all_rows_cells):
         lines.append("<tr>")
         for i, cell in enumerate(cells):
             is_ticket = (i == 1)
-            is_url = (i in (2, 3))
+            is_url = (i in url_cols)
             lines.append(_build_td(cell, is_ticket=is_ticket, is_url=is_url))
         lines.append("</tr>")
 
@@ -671,10 +695,12 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
     Log.info(f"Existing rows on page: {len(existing_cells)} "
          f"({len(existing_versions)} unique versions)")
 
+    include_tarball = _needs_gi_tarball(branch, release_type)
+
     new_cells = []
     skipped = 0
     for row in rows:
-        cells = row_to_cells(row)
+        cells = row_to_cells(row, include_tarball=include_tarball)
         ver_normalized = _normalize_version(cells[0])
         if ver_normalized in existing_versions:
             Log.info(f"  SKIP (exists): {cells[0]}")
@@ -690,7 +716,7 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
                 "total": len(existing_cells), "page_id": page_id}
 
     all_cells = existing_cells + new_cells
-    table_html = build_table_storage(all_cells)
+    table_html = build_table_storage(all_cells, include_tarball=include_tarball)
     full_content = f"<h1>{page_title}</h1>\n{table_html}"
 
     Log.info(f"Table rebuilt: {len(new_cells)} new + {len(existing_cells)} existing "

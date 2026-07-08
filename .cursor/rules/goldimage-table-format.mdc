@@ -32,10 +32,14 @@ Combined titles (containing `/PC:`) produce two rows — AOS first, then PC. Eac
 
 Only releases with **Closed** Jira EPIC status are included.
 
+## GI tarball column (PC ganges-7.3 and ganges-7.5 only)
+
+For PC releases on `ganges-7.3` and `ganges-7.5` branches, an additional **GI tarball** column is included between "RPM List" and "Merge Date". The tarball is downloaded from the same Artifactory build directory (file ending `.tar.xz`), renamed to `pcvm.tar.xz`, and uploaded alongside changelog/rpm. This column does NOT appear for AOS rows or other branches.
+
 ## Endor URL construction
 
 Base: `http://endor.dyn.nutanix.com/GoldImages/Centos_SVM/Master/`
-Pattern: `{version}/changelog.txt` and `{version}/rpm.txt`. Construct separately for AOS and PC rows.
+Pattern: `{version}/changelog.txt` and `{version}/rpm.txt`. For PC ganges-7.3/7.5 also `{version}/pcvm.tar.xz`. Construct separately for AOS and PC rows.
 
 ## Formatting rules
 

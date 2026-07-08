@@ -10,6 +10,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.config import _get_env, ARTIFACTORY_BASE, ARTIFACTORY_API_STORAGE
 from src.logger import Log
 
+PC_TARBALL_BRANCHES = {"ganges-7.3", "ganges-7.5"}
+
+
+def _needs_gi_tarball(branch, rtype):
+    """GI tarball only applies to PC on ganges-7.3 and ganges-7.5."""
+    return branch in PC_TARBALL_BRANCHES and rtype.upper() == "PC"
+
 
 def _extract_build_number(ci_url):
     """Extract the CircleCI build number from a target_url."""
@@ -43,6 +50,25 @@ def _resolve_rpm_url(build_num, rtype, art_token=None):
     return None
 
 
+def _resolve_tarball_url(build_num, art_token=None):
+    """Resolve the .tar.xz download URL from the build directory (PC only)."""
+    cache_key = build_num
+    if cache_key not in _rpm_url_cache:
+        _rpm_url_cache[cache_key] = _list_build_dir(build_num, art_token)
+
+    children = _rpm_url_cache[cache_key]
+    base = ARTIFACTORY_BASE.format(build_num=build_num)
+
+    for uri in children:
+        if uri.endswith(".tar.xz"):
+            Log.info(f"[PC] Found tarball in build {build_num}: {uri}")
+            return f"{base}{uri}"
+
+    Log.error(f"[PC] No .tar.xz file found in build {build_num}. "
+              f"Files in directory: {children}")
+    return None
+
+
 def _list_build_dir(build_num, art_token=None):
     """List file URIs inside a build-artifacts directory."""
     dir_url = ARTIFACTORY_API_STORAGE.format(build_num=build_num)
@@ -58,26 +84,48 @@ def _list_build_dir(build_num, art_token=None):
 
 
 def _download_one_rpm(url, dest_path, art_token=None):
-    """Download a single rpm.txt file. Returns (dest_path, size) or None."""
+    """Download a single file. Returns (dest_path, size) or None.
+
+    Uses streaming for large files (.tar.xz) with extended timeout.
+    """
     dest_dir = os.path.dirname(dest_path)
     os.makedirs(dest_dir, exist_ok=True)
     req = urllib.request.Request(url)
     if art_token:
         req.add_header("Authorization", f"Bearer {art_token}")
+
+    is_tarball = dest_path.endswith(".tar.xz")
+    timeout = 600 if is_tarball else 30
+
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = resp.read()
-        with open(dest_path, "wb") as f:
-            f.write(data)
-        return dest_path, len(data)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if is_tarball:
+                size = 0
+                with open(dest_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        size += len(chunk)
+            else:
+                data = resp.read()
+                size = len(data)
+                with open(dest_path, "wb") as f:
+                    f.write(data)
+        return dest_path, size
     except (urllib.error.HTTPError, urllib.error.URLError, OSError) as e:
         Log.error(f"Download failed for {dest_path}: {e}")
         return None
 
 
 def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
-                           filter_type="all"):
-    """Download rpm.txt and old_rpm.txt from Artifactory for AOS and/or PC."""
+                           filter_type="all", branch=None):
+    """Download rpm.txt and old_rpm.txt from Artifactory for AOS and/or PC.
+
+    For PC on ganges-7.3/ganges-7.5, also downloads the .tar.xz file
+    and saves it as pcvm.tar.xz.
+    """
     art_token = (_get_env("ARTIFACTORY_TOKEN")
                  or _get_env("ARTIFACTORY_API_KEY"))
 
@@ -102,6 +150,14 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
             if url:
                 dest = os.path.join(output_dir, version, rtype, "rpm.txt")
                 tasks.append((rtype, version, "rpm.txt", url, dest))
+
+            if _needs_gi_tarball(branch, rtype):
+                tarball_url = _resolve_tarball_url(build_num, art_token)
+                if tarball_url:
+                    tarball_dest = os.path.join(
+                        output_dir, version, rtype, "pcvm.tar.xz")
+                    tasks.append((rtype, version, "pcvm.tar.xz",
+                                  tarball_url, tarball_dest))
 
         prev_row = prev_rows.get(rtype, {}).get(version)
         if prev_row:

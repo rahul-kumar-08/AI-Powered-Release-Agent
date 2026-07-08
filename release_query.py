@@ -190,6 +190,14 @@ def _parse_rhel8_version(version_str):
     return None
 
 
+PC_TARBALL_BRANCHES = {"ganges-7.3", "ganges-7.5"}
+
+
+def _needs_gi_tarball(branch, rtype):
+    """GI tarball only applies to PC on ganges-7.3 and ganges-7.5."""
+    return branch in PC_TARBALL_BRANCHES and rtype.upper() == "PC"
+
+
 def build_endor_urls(version_str, release_type, branch):
     """
     Construct changelog and RPM URLs based on release type, RHEL version, and branch.
@@ -237,10 +245,15 @@ def build_endor_urls(version_str, release_type, branch):
     else:
         base_dir = f"{ENDOR_AOS_RHEL9_MASTER}/{version_str}"
 
-    return {
+    urls = {
         "changelog": f"{base_dir}/changelog.txt",
         "rpm": f"{base_dir}/rpm.txt",
     }
+
+    if _needs_gi_tarball(branch, release_type):
+        urls["gi_tarball"] = f"{base_dir}/pcvm.tar.xz"
+
+    return urls
 
 
 def validate_url(url):
@@ -505,7 +518,31 @@ def fetch_gerrit_releases(server_key, branch, count):
 
 
 def fetch_github_releases(server_key, branch, count):
-    """Fetch release commits from GitHub (has full SHAs for read_file)."""
+    """Fetch release commits from GitHub (has full SHAs for read_file).
+
+    For non-master branches, uses the Sourcegraph streaming API to avoid
+    the MCP 615-char message truncation that limits results. Only searches
+    the specific branch (not default) to avoid pulling in unrelated commits.
+    """
+    escaped_repo = re.escape(GITHUB_REPO)
+    repo_filter = f"repo:^{escaped_repo}$"
+
+    if branch == "master":
+        query = f'type:commit {repo_filter} message:"Release gold image" message:"main-master"'
+        commits = _sg_stream_search(query, count=count * 4)
+        if commits:
+            return commits
+    else:
+        query = (
+            f'type:commit {repo_filter} rev:{branch} '
+            f'message:"Release gold image"'
+        )
+        commits = _sg_stream_search(query, count=count * 4)
+        if commits:
+            return commits
+
+    # Fallback to MCP commit_search if streaming API unavailable
+    Log.info("GitHub streaming API unavailable, falling back to MCP commit_search")
     if branch == "master":
         repos = [GITHUB_REPO]
         message_terms = ["Release", "gold image", "main-master"]
@@ -1454,6 +1491,8 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
                 "notes": branch,
                 "commit": commit_sha,
             }
+            if urls.get("gi_tarball"):
+                row_data["gi_tarball_url"] = urls["gi_tarball"]
             row_data.update(_pc_extra)
             rows.append(row_data)
 
@@ -1593,6 +1632,25 @@ def _resolve_rpm_url(build_num, rtype, art_token=None):
     return None
 
 
+def _resolve_tarball_url(build_num, art_token=None):
+    """Resolve the .tar.xz download URL from the build directory (PC only)."""
+    cache_key = build_num
+    if cache_key not in _rpm_url_cache:
+        _rpm_url_cache[cache_key] = _list_build_dir(build_num, art_token)
+
+    children = _rpm_url_cache[cache_key]
+    base = ARTIFACTORY_BASE.format(build_num=build_num)
+
+    for uri in children:
+        if uri.endswith(".tar.xz"):
+            Log.info(f"[PC] Found tarball in build {build_num}: {uri}")
+            return f"{base}{uri}"
+
+    Log.error(f"[PC] No .tar.xz file found in build {build_num}. "
+              f"Files in directory: {children}")
+    return None
+
+
 def _list_build_dir(build_num, art_token=None):
     """List file URIs inside a build-artifacts directory. Returns list of URI strings."""
     dir_url = ARTIFACTORY_API_STORAGE.format(build_num=build_num)
@@ -1608,25 +1666,43 @@ def _list_build_dir(build_num, art_token=None):
 
 
 def _download_one_rpm(url, dest_path, art_token=None):
-    """Download a single rpm.txt file. Returns (dest_path, size) or None."""
+    """Download a single file. Returns (dest_path, size) or None.
+
+    Uses streaming for large files (.tar.xz) with extended timeout.
+    """
     dest_dir = os.path.dirname(dest_path)
     os.makedirs(dest_dir, exist_ok=True)
     req = Request(url)
     if art_token:
         req.add_header("Authorization", f"Bearer {art_token}")
+
+    is_tarball = dest_path.endswith(".tar.xz")
+    timeout = 600 if is_tarball else 30
+
     try:
-        with urlopen(req, timeout=30) as resp:
-            data = resp.read()
-        with open(dest_path, "wb") as f:
-            f.write(data)
-        return dest_path, len(data)
+        with urlopen(req, timeout=timeout) as resp:
+            if is_tarball:
+                size = 0
+                with open(dest_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        size += len(chunk)
+            else:
+                data = resp.read()
+                size = len(data)
+                with open(dest_path, "wb") as f:
+                    f.write(data)
+        return dest_path, size
     except (error.HTTPError, error.URLError, OSError) as e:
         Log.error(f"Download failed for {dest_path}: {e}")
         return None
 
 
 def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
-                           filter_type="all"):
+                           filter_type="all", branch=None):
     """Download rpm.txt and old_rpm.txt from Artifactory for AOS and/or PC.
 
     For each release row, downloads the current release's rpm.txt and the
@@ -1637,10 +1713,8 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
         <output_dir>/<goldimage_version>/PC/rpm.txt       (current)
         <output_dir>/<goldimage_version>/PC/old_rpm.txt   (previous)
 
-    Artifactory stores rpm.txt with versioned filenames (e.g.
-    ``cvm-<ver>-<branch>-<sha7>-<build>-x86_64-rpm.txt``).  The
-    ``_resolve_rpm_url`` helper resolves the correct filename via a HEAD
-    check, falling back to a directory listing if needed.
+    For PC on ganges-7.3/ganges-7.5, also downloads the .tar.xz file
+    and saves it as pcvm.tar.xz.
 
     Args:
         rows:        current release rows (with ci_cvm / ci_pcvm populated)
@@ -1650,6 +1724,7 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
         output_dir:  base directory for downloads.
         filter_type: "all" downloads both AOS and PC, "aos" only AOS,
                      "pc" only PC.
+        branch:      branch name (used to determine GI tarball eligibility).
 
     Returns:
         list of dicts: rtype, version, file, path.
@@ -1680,6 +1755,14 @@ def download_rpm_artifacts(rows, prev_rows, output_dir="goldimage",
             if url:
                 dest = os.path.join(output_dir, version, rtype, "rpm.txt")
                 tasks.append((rtype, version, "rpm.txt", url, dest))
+
+            if _needs_gi_tarball(branch, rtype):
+                tarball_url = _resolve_tarball_url(build_num, art_token)
+                if tarball_url:
+                    tarball_dest = os.path.join(
+                        output_dir, version, rtype, "pcvm.tar.xz")
+                    tasks.append((rtype, version, "pcvm.tar.xz",
+                                  tarball_url, tarball_dest))
 
         prev_row = prev_rows.get(rtype, {}).get(version)
         if prev_row:
@@ -1989,14 +2072,23 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
             version = row.get("goldimage_version", "unknown")
             rtype = row.get("type", "AOS")
 
-            for filename, url_key in [("changelog.txt", "changelog_url"),
-                                      ("rpm.txt", "rpm_url")]:
+            file_pairs = [
+                ("changelog.txt", "changelog_url"),
+                ("rpm.txt", "rpm_url"),
+            ]
+            if row.get("gi_tarball_url"):
+                file_pairs.append(("pcvm.tar.xz", "gi_tarball_url"))
+
+            for filename, url_key in file_pairs:
                 url = row.get(url_key, "")
                 if not url or url == "Data not found":
                     continue
 
                 local_path = os.path.join(output_dir, version, rtype, filename)
                 if not os.path.isfile(local_path):
+                    if filename == "pcvm.tar.xz":
+                        Log.error(f"[{rtype}] {filename} not found locally at "
+                                  f"{local_path} — Artifactory download may have failed")
                     continue
 
                 relative = url.replace(BASE_URL, "").lstrip("/")
@@ -2755,7 +2847,7 @@ Examples:
     # Download rpm.txt + old_rpm.txt from Artifactory if requested
     if args.download_rpm:
         downloaded = download_rpm_artifacts(rows, prev_rows, args.rpm_dir,
-                                           args.filter)
+                                           args.filter, branch=args.branch)
         for d in downloaded:
             Log.info(f"[{d['rtype']}] {d['file']} → {d['path']}")
         _pipeline_stats["rpm_downloaded"] = len(downloaded)

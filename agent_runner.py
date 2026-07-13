@@ -103,8 +103,14 @@ Rules:
 - COUNT HANDLING (critical):
   - When the user specifies a number (e.g. "last 5", "3 releases"), set count
     to that number.
-  - When the user says "last release", "latest release", or "last 1 release"
-    (singular, or the number 1), set count=1.
+  - IMPORTANT UPDATE INTENT RULE:
+    - If the mission also requests upload/update/push/publish to Confluence,
+      treat "last release", "latest release", or "last 1 release" as
+      incremental update intent. In that case, DO NOT set count=1.
+      Instead set since_confluence=true and omit count so the pipeline
+      computes how many new releases exist since Confluence latest.
+  - For read-only missions (no Confluence update intent), when the user says
+    "last release", "latest release", or "last 1 release", set count=1.
   - When the user does NOT specify any count or number (e.g. "give me releases
     from master", "releases from ganges-7.6"), do NOT include count in params.
     The pipeline will auto-determine count by looking up Confluence for the
@@ -141,6 +147,10 @@ Output:
 Mission: "Releases from ganges-7.6 and push to confluence"
 Output:
 [{{"step":1,"tool":"release_query","params":{{"branch":"ganges-7.6"}}}}]
+
+Mission: "Get last release from master and update confluence"
+Output:
+[{{"step":1,"tool":"release_query","params":{{"branch":"master","since_confluence":true}}}}]
 
 Mission: "Last 3 PC releases from master"
 Output:
@@ -256,6 +266,62 @@ def parse_steps(raw_text):
     except json.JSONDecodeError as e:
         print(f"[Parse] Invalid JSON: {e}\n{text[start:end + 1]}", file=sys.stderr)
         return None
+
+
+def _mission_has_update_intent(mission):
+    """True when mission asks to upload/update/publish to Confluence."""
+    text = (mission or "").lower()
+    triggers = (
+        "update confluence",
+        "push to confluence",
+        "upload to confluence",
+        "publish to confluence",
+        "update",
+        "upload",
+        "publish",
+    )
+    return any(t in text for t in triggers) and "confluence" in text
+
+
+def _mission_has_latest_single_intent(mission):
+    """True when mission wording implies a singular latest/last release."""
+    text = (mission or "").lower()
+    phrases = (
+        "last release",
+        "latest release",
+        "last 1 release",
+        "latest 1 release",
+    )
+    return any(p in text for p in phrases)
+
+
+def normalize_steps_for_update_intent(steps, mission):
+    """Safety net for decomposition drift in update-intent missions.
+
+    If user asks to update/push/publish to Confluence and wording implies
+    singular latest/last release, force release_query to use Confluence-based
+    delta mode by setting since_confluence=true and removing count=1.
+    """
+    if not steps:
+        return steps
+    if not (_mission_has_update_intent(mission)
+            and _mission_has_latest_single_intent(mission)):
+        return steps
+
+    changed = False
+    for step in steps:
+        if step.get("tool") != "release_query":
+            continue
+        params = step.setdefault("params", {})
+        if params.get("count") == 1 and not params.get("since_confluence"):
+            params.pop("count", None)
+            params["since_confluence"] = True
+            changed = True
+
+    if changed:
+        print("[Runner] Normalized steps: update-intent latest request "
+              "uses since_confluence=true (count removed).")
+    return steps
 
 
 # ---------------------------------------------------------------------------
@@ -626,6 +692,85 @@ def print_summary(results):
 
 
 # ---------------------------------------------------------------------------
+# Interactive mission input
+# ---------------------------------------------------------------------------
+
+def _prompt_choice(prompt, options, default=None):
+    """Prompt the user to choose one value from a constrained option set."""
+    option_display = "/".join(options)
+    suffix = " [%s]" % default if default else ""
+    while True:
+        raw = input("%s (%s)%s: " % (prompt, option_display, suffix)).strip().lower()
+        if not raw and default is not None:
+            return default
+        if raw in options:
+            return raw
+        print("Invalid value. Choose one of: %s" % option_display)
+
+
+def _prompt_yes_no(prompt, default=False):
+    """Prompt the user for a yes/no answer."""
+    default_hint = "Y/n" if default else "y/N"
+    while True:
+        raw = input("%s (%s): " % (prompt, default_hint)).strip().lower()
+        if not raw:
+            return default
+        if raw in ("y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+        print("Please answer with y or n.")
+
+
+def build_interactive_mission():
+    """Collect mission details interactively and synthesize a mission string."""
+    print("[Runner] No mission argument provided. Starting interactive mode.")
+    print("[Runner] Press Enter to accept defaults.")
+
+    branch_options = [b.lower() for b in ALL_BRANCHES] + ["all"]
+    branch = _prompt_choice("Branch", branch_options, default="master")
+    release_type = _prompt_choice("Release type", ["all", "aos", "pc"], default="all")
+    count_raw = input("Count (blank = auto-determine from Confluence): ").strip()
+    upload_confluence = _prompt_yes_no("Update/push to Confluence?", default=False)
+    force_publish = _prompt_yes_no("Force publish to Endor if already exists?", default=False)
+
+    type_phrase_map = {
+        "all": "for both AOS and PC",
+        "aos": "for AOS",
+        "pc": "for PC",
+    }
+    type_phrase = type_phrase_map[release_type]
+
+    mission_prefix = ""
+    if count_raw:
+        if count_raw.isdigit() and int(count_raw) > 0:
+            if branch == "all":
+                mission_prefix = "Get last %s releases from each branch %s" % (
+                    count_raw, type_phrase
+                )
+            else:
+                mission_prefix = "Extract last %s releases from %s %s" % (
+                    count_raw, branch, type_phrase
+                )
+        else:
+            print("[Runner] Ignoring invalid count; using auto-determine mode.")
+
+    if not mission_prefix:
+        if branch == "all":
+            mission_prefix = "Get releases from every branch %s" % type_phrase
+        else:
+            mission_prefix = "Get releases from %s %s" % (branch, type_phrase)
+
+    mission_suffix = "and update confluence" if upload_confluence else "(read-only)"
+    mission = "%s %s" % (mission_prefix, mission_suffix)
+    if force_publish:
+        mission = "Forcefully " + mission
+    mission = mission.replace("  ", " ").strip()
+    print("[Runner] Built mission: %s" % mission)
+    return mission
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -636,7 +781,9 @@ def main():
         description="Agent Runner: decompose missions via Cursor, dispatch to tools"
     )
     parser.add_argument(
-        "mission", help="Natural language mission string"
+        "mission",
+        nargs="*",
+        help="Natural language mission string (optional in interactive mode)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -655,6 +802,14 @@ def main():
         help="Skip Cursor decomposition — use a pre-built JSON step file instead",
     )
     args = parser.parse_args()
+    mission = " ".join(args.mission).strip()
+
+    if not args.steps_json and not mission:
+        try:
+            mission = build_interactive_mission()
+        except (EOFError, KeyboardInterrupt):
+            print("\n[Runner] Interactive input cancelled.", file=sys.stderr)
+            sys.exit(1)
 
     # Validate MCP server tokens before running any steps
     if not args.dry_run:
@@ -681,9 +836,10 @@ def main():
             )
             sys.exit(1)
 
-        print("[Runner] Mission: %s" % args.mission)
+        print("[Runner] Mission: %s" % mission)
         print("[Runner] Decomposing via Cursor Cloud Agent...")
-        steps = decompose_mission(args.mission, cursor_key, verbose=args.verbose)
+        steps = decompose_mission(mission, cursor_key, verbose=args.verbose)
+        steps = normalize_steps_for_update_intent(steps, mission)
 
     if not steps:
         print("Failed to decompose mission into steps.", file=sys.stderr)

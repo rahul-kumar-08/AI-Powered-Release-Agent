@@ -280,9 +280,18 @@ def _build_title_patterns(rtype, branch, branch_ver, rhel_ver):
                     patterns.append(f"Master-RHEL9.{minor}")
                 patterns.append("Master-RHEL9")
             patterns.append("Master - PC")
+            patterns.append("Master-PC")
+            patterns.append("Master PC")
         elif branch_ver:
             patterns.append(f"PC.{branch_ver}")
             patterns.append(f"pc.{branch_ver}")
+            # Backward-compatible aliases for minor page naming differences.
+            patterns.append(f"PC {branch_ver}")
+            patterns.append(f"PC-{branch_ver}")
+            patterns.append(f"PC - {branch_ver}")
+            patterns.append(f"pc {branch_ver}")
+            patterns.append(f"pc-{branch_ver}")
+            patterns.append(f"pc - {branch_ver}")
     return patterns
 
 

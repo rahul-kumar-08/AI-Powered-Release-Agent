@@ -5,25 +5,19 @@ from src.logger import Log
 
 
 def upload_to_confluence(rows, branch, filter_type="all", force_rebuild=False):
-    """Upload release rows to Confluence using separate AOS/PC parent pages."""
+    """Upload release rows to Confluence using a single parent page."""
     try:
         from tools.mcp_confluence_client import upload_releases
     except ImportError:
         Log.error("Confluence upload skipped: tools.mcp_confluence_client not available")
         return []
 
-    aos_page_id = _get_env("AOS_CONFLUENCE_PAGE_ID")
-    pc_page_id = _get_env("PC_CONFLUENCE_PAGE_ID")
     fallback_id = _get_env("CONFLUENCE_PAGE_ID")
-
-    page_id_map = {
-        "AOS": aos_page_id or fallback_id,
-        "PC": pc_page_id or fallback_id,
-    }
+    page_id_map = {"AOS": fallback_id, "PC": fallback_id}
 
     if not any(page_id_map.values()):
-        Log.error("Confluence upload skipped: no page IDs set in tools/.env "
-                  "(need AOS_CONFLUENCE_PAGE_ID / PC_CONFLUENCE_PAGE_ID or CONFLUENCE_PAGE_ID)")
+        Log.error("Confluence upload skipped: no page ID set in tools/.env "
+                  "(need CONFLUENCE_PAGE_ID)")
         return []
 
     types_in_rows = set(r.get("type", "AOS").upper() for r in rows)

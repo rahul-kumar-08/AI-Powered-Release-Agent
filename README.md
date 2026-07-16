@@ -36,7 +36,7 @@ Commonly used variables:
 - `SOURCEGRAPH_TOKEN`
 - `JIRA_BASE_URL`, `JIRA_API_TOKEN` (or `JIRA_TOKEN`)
 - `CONFLUENCE_BASE_URL`, `CONFLUENCE_API_TOKEN` (or `CONFLUENCE_TOKEN`)
-- `AOS_CONFLUENCE_PAGE_ID`, `PC_CONFLUENCE_PAGE_ID` (or fallback `CONFLUENCE_PAGE_ID`)
+- `CONFLUENCE_PAGE_ID` (single parent page for both AOS and PC)
 - `JENKINS_BASE`, `JENKINS_USER`, `JENKINS_TOKEN`
 - `CURSOR_API_KEY` (required for `agent_runner.py`)
 
@@ -168,10 +168,13 @@ Pipeline runs also print a stage summary (extracted rows, CI checks, RPM/changel
 
 ## Confluence behavior
 
-- Uses separate parent pages for AOS/PC when configured.
-- Auto-routes to branch-specific child pages.
+- Uses a single parent page (`CONFLUENCE_PAGE_ID`) for both AOS and PC.
+- Auto-routes to branch/type-specific child pages under the same parent.
 - Deduplicates by GoldImage version and keeps newest-first ordering.
-- Falls back to `CONFLUENCE_PAGE_ID` if type-specific page IDs are not set.
+
+Final output Confluence page:
+
+- [CVM GoldImage GI Releases](https://confluence.eng.nutanix.com:8443/spaces/INFRA/pages/86889720/CVM+GoldImage+GI+Releases)
 
 ## License
 

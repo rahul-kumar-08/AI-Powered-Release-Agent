@@ -2123,31 +2123,22 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
 # ---------------------------------------------------------------------------
 
 def upload_to_confluence(rows, branch, filter_type="all"):
-    """Upload release rows to Confluence using separate AOS/PC parent pages.
+    """Upload release rows to Confluence using a single parent page.
 
-    Reads ``AOS_CONFLUENCE_PAGE_ID`` and ``PC_CONFLUENCE_PAGE_ID`` from
-    ``tools/.env``.  Each release type is routed to its own parent page
-    where child pages are discovered/created per branch.
-
-    Falls back to a single ``CONFLUENCE_PAGE_ID`` if the type-specific
-    variables are not set.
+    Reads ``CONFLUENCE_PAGE_ID`` from ``tools/.env``. Both AOS and PC
+    releases are routed under the same parent page where child pages are
+    discovered/created per branch.
 
     Returns:
         list of dicts with keys: release_type, added, skipped, total, page_id.
     """
    
-    aos_page_id = _get_env("AOS_CONFLUENCE_PAGE_ID")
-    pc_page_id = _get_env("PC_CONFLUENCE_PAGE_ID")
     fallback_id = _get_env("CONFLUENCE_PAGE_ID")
-
-    page_id_map = {
-        "AOS": aos_page_id or fallback_id,
-        "PC": pc_page_id or fallback_id,
-    }
+    page_id_map = {"AOS": fallback_id, "PC": fallback_id}
 
     if not any(page_id_map.values()):
-        Log.error("Confluence upload skipped: no page IDs set in tools/.env "
-                  "(need AOS_CONFLUENCE_PAGE_ID / PC_CONFLUENCE_PAGE_ID or CONFLUENCE_PAGE_ID)")
+        Log.error("Confluence upload skipped: no page ID set in tools/.env "
+                  "(need CONFLUENCE_PAGE_ID)")
         return []
 
     types_in_rows = set(r.get("type", "AOS").upper() for r in rows)
@@ -2308,15 +2299,13 @@ def _compute_count_from_confluence(branch, filter_type, server_key):
     6. Return the count, or None if lookup fails
     """
 
-    aos_page_id = _get_env("AOS_CONFLUENCE_PAGE_ID")
-    pc_page_id = _get_env("PC_CONFLUENCE_PAGE_ID")
     fallback_id = _get_env("CONFLUENCE_PAGE_ID")
 
     lookup_types = []
     if filter_type in ("all", "aos"):
-        lookup_types.append(("AOS", aos_page_id or fallback_id))
+        lookup_types.append(("AOS", fallback_id))
     if filter_type in ("all", "pc"):
-        lookup_types.append(("PC", pc_page_id or fallback_id))
+        lookup_types.append(("PC", fallback_id))
 
     confluence_latest = {}
     confluence_all = {}
@@ -2418,14 +2407,17 @@ def _compute_count_from_confluence(branch, filter_type, server_key):
             # everything above it (indices 0..position-1) is newer.
             # This naturally excludes the Confluence latest itself.
             candidate_count = position
-            Log.info(f"  [{rtype}] Version '{conf_version}' found at position "
-                     f"{position} -> {candidate_count} newer release(s) "
-                     f"(excluding Confluence latest)")
+            Log.info(f"  [{rtype}] Confluence baseline version '{conf_version}' "
+                     f"found in commit history at position {position}; "
+                     f"identified {candidate_count} higher/newer release(s) "
+                     f"above baseline.")
         else:
             # Fallback: version not found in commits, use date-only counting.
             # Only count commits strictly newer than Confluence date (excludes it).
-            Log.info(f"  [{rtype}] Version '{conf_version}' not found in commits, "
-                     f"falling back to date-based counting")
+            Log.info(f"  [{rtype}] Confluence baseline version '{conf_version}' "
+                     "not found in current commits; "
+                     "counting higher/newer releases using Confluence merge-date "
+                     "comparison.")
             if conf_date == datetime.min:
                 Log.info(f"  [{rtype}] No valid Confluence date, cannot determine count")
                 continue
@@ -2450,8 +2442,8 @@ def _compute_count_from_confluence(branch, filter_type, server_key):
                         candidate_count += 1
                     else:
                         break
-            Log.info(f"  [{rtype}] Date-based count: {candidate_count} newer release(s) "
-                     f"(excluding Confluence latest)")
+            Log.info(f"  [{rtype}] Higher/newer releases counted from Confluence "
+                     f"date baseline: {candidate_count}.")
 
         # Date confirmation: verify counted commits are newer than Confluence date
         if position is not None and conf_date != datetime.min:

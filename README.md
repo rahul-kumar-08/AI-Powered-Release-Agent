@@ -109,6 +109,39 @@ Runner behavior:
 - It validates tokens before executing steps.
 - It prints stage-wise pipeline status and discrepancies at the end.
 
+#### Interactive mode (recommended for ad-hoc runs)
+
+Start the runner without a mission:
+
+```bash
+python3 agent_runner.py
+```
+
+Then enter missions one-by-one in the prompt.
+
+Example interactive session:
+
+```text
+$ python3 agent_runner.py
+Interactive mode started. Type your mission and press Enter.
+
+> Extract last 3 releases from master in table format
+# Runner decomposes mission -> executes release_query.py with mapped flags
+# Output: release table + stage summary
+
+> Get releases from ganges-7.5 and update confluence
+# Runner executes extraction + upload stages (unless disabled by flags/policy)
+# Output: Confluence update result + stage summary
+
+> quit
+```
+
+Tips:
+
+- Use natural language; `agent_runner.py` maps intent to executable steps.
+- For read-only runs, include wording like "view only" or use `release_query.py --no-upload`.
+- Use `--dry-run` with a mission to preview planned steps without executing them.
+
 ### Available prebuilt steps (`steps/`)
 
 - `master-full.json`

@@ -382,15 +382,12 @@ def run_confluence_update(params):
             
             release_type = detect_release_type(rows)
 
-        aos_page_id = _get_env("AOS_CONFLUENCE_PAGE_ID")
-        pc_page_id = _get_env("PC_CONFLUENCE_PAGE_ID")
         fallback_id = _get_env("CONFLUENCE_PAGE_ID")
-        page_id_map = {"AOS": aos_page_id or fallback_id,
-                       "PC": pc_page_id or fallback_id}
+        page_id_map = {"AOS": fallback_id, "PC": fallback_id}
         parent_id = page_id_map.get(release_type, fallback_id)
 
         if not parent_id:
-            return {"ok": False, "error": f"No Confluence page ID set for {release_type} in tools/.env"}
+            return {"ok": False, "error": "No Confluence page ID set in tools/.env (need CONFLUENCE_PAGE_ID)"}
 
         result = upload_releases(
             "atlassian",

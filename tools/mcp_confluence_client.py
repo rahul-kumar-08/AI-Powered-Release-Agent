@@ -238,10 +238,32 @@ def find_target_page(server_key, parent_id, branch, release_type,
                 Log.info(f"Matched page: '{page['title']}' (id={pid})")
                 return pid, page["title"]
 
-    # Fuzzy: branch version appears anywhere in title
+    # Minimal regex fallback for PC/master naming drift:
+    # Match forms like:
+    #   PC-Master-EL9, PC_Master_EL9, PC Master EL9.8, PC Master-RHEL9
+    if rtype == "PC" and branch == "master" and rhel_ver:
+        pc_master_re = re.compile(
+            rf"^pc[-_ ]*master(?:[-_ ]*(?:el|rhel)\s*{re.escape(rhel_ver)}(?:\.\d+)?)?$",
+            re.IGNORECASE,
+        )
+        for page in all_pages:
+            title = page.get("title", "").strip()
+            if pc_master_re.match(title):
+                pid = str(page.get("id", ""))
+                Log.info(f"Regex-matched page: '{page['title']}' (id={pid})")
+                return pid, page["title"]
+
+    # Fuzzy: branch version appears in title.
+    # For PC, keep matching strict to PC-prefixed page names to avoid
+    # accidentally routing to AOS-style pages like "Modern STS - x.y".
     if branch_ver:
         for page in all_pages:
             title_lower = page.get("title", "").lower()
+            if branch_ver not in title_lower:
+                continue
+            if rtype == "PC":
+                if not title_lower.strip().startswith("pc"):
+                    continue
             if branch_ver in title_lower:
                 pid = str(page.get("id", ""))
                 Log.info(f"Fuzzy-matched page: '{page['title']}' (id={pid})")
@@ -269,19 +291,22 @@ def _build_title_patterns(rtype, branch, branch_ver, rhel_ver):
             patterns.append(f"Modern STS - {branch_ver}")
     else:  # PC
         if branch == "master":
+            # Keep exact checks intentionally minimal; regex fallback in
+            # find_target_page handles common PC master naming variations.
             if rhel_ver:
-                # e.g. "Master-RHEL9.6", "Master-RHEL9"
-                patterns.append(f"Master-RHEL{rhel_ver}")
-                for minor in range(10, -1, -1):
-                    patterns.append(f"Master-RHEL{rhel_ver}.{minor}")
+                patterns.extend([
+                    f"PC-Master-EL{rhel_ver}",
+                    f"PC Master-RHEL{rhel_ver}",
+                    f"PC-Master",
+                    "PC Master",
+                ])
             else:
-                # No rhel_ver available (auto-count mode) — try EL9 variants first
-                for minor in range(10, -1, -1):
-                    patterns.append(f"Master-RHEL9.{minor}")
-                patterns.append("Master-RHEL9")
-            patterns.append("Master - PC")
-            patterns.append("Master-PC")
-            patterns.append("Master PC")
+                patterns.extend([
+                    "PC-Master-EL9",
+                    "PC Master-RHEL9",
+                    "PC-Master",
+                    "PC Master",
+                ])
         elif branch_ver:
             patterns.append(f"PC.{branch_ver}")
             patterns.append(f"pc.{branch_ver}")
@@ -302,7 +327,7 @@ def _new_page_title(rtype, branch, branch_ver, rhel_ver):
         return f"Modern STS - {branch_ver}" if branch_ver else f"AOS {branch}"
     else:
         if branch == "master":
-            return f"Master-RHEL{rhel_ver or '9'}"
+            return f"PC-Master-EL{rhel_ver or '9'}"
         return f"PC.{branch_ver}" if branch_ver else f"PC {branch}"
 
 

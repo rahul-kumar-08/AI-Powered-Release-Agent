@@ -32,13 +32,13 @@ pip install -r requirements.txt
 
 Commonly used variables:
 
-- `GITHUB_TOKEN`
-- `SOURCEGRAPH_TOKEN`
-- `JIRA_BASE_URL`, `JIRA_API_TOKEN` (or `JIRA_TOKEN`)
-- `CONFLUENCE_BASE_URL`, `CONFLUENCE_API_TOKEN` (or `CONFLUENCE_TOKEN`)
-- `CONFLUENCE_PAGE_ID` (single parent page for both AOS and PC)
+- `GITHUB_TOKEN` (https://github.com/settings/tokens)
+- `SOURCEGRAPH_TOKEN` (https://sourcegraph.ntnxdpro.com/users/rahul.kumar3/settings/tokens)
+- `JIRA_BASE_URL`, `JIRA_API_TOKEN` (or `JIRA_TOKEN`) (https://jira.nutanix.com/secure/ViewProfile.jspa?selectedTab=com.atlassian.pats.pats-plugin:jira-user-personal-access-tokens)
+- `CONFLUENCE_BASE_URL`, `CONFLUENCE_API_TOKEN` (or `CONFLUENCE_TOKEN`) (https://confluence.eng.nutanix.com:8443/plugins/personalaccesstokens/usertokens.action)
+- `CONFLUENCE_PAGE_ID` (single parent page for both AOS and PC from the link) (https://confluence.eng.nutanix.com:8443/spaces/~rahul.kumar3/pages/`569444493`/CVM+GoldImage+GI+Releases)
 - `JENKINS_BASE`, `JENKINS_USER`, `JENKINS_TOKEN`
-- `CURSOR_API_KEY` (required for `agent_runner.py`)
+- `CURSOR_API_KEY` (required for `agent_runner.py`) (https://cursor.com/dashboard/api?section=user-keys#user-api-keys)
 
 Also set Artifactory and SFTP variables if RPM/changelog upload stages are enabled.
 

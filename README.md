@@ -33,16 +33,58 @@ pip install -r requirements.txt
 Commonly used variables:
 
 - `GITHUB_TOKEN` (https://github.com/settings/tokens)
-- `SOURCEGRAPH_TOKEN` (https://sourcegraph.ntnxdpro.com/users/rahul.kumar3/settings/tokens)
+- `SOURCEGRAPH_TOKEN` (https://sourcegraph.ntnxdpro.com/users/<User-Name>/settings/tokens)
 - `JIRA_BASE_URL`, `JIRA_API_TOKEN` (or `JIRA_TOKEN`) (https://jira.nutanix.com/secure/ViewProfile.jspa?selectedTab=com.atlassian.pats.pats-plugin:jira-user-personal-access-tokens)
 - `CONFLUENCE_BASE_URL`, `CONFLUENCE_API_TOKEN` (or `CONFLUENCE_TOKEN`) (https://confluence.eng.nutanix.com:8443/plugins/personalaccesstokens/usertokens.action)
-- `CONFLUENCE_PAGE_ID` (single parent page for both AOS and PC from the link) (https://confluence.eng.nutanix.com:8443/spaces/~rahul.kumar3/pages/`569444493`/CVM+GoldImage+GI+Releases)
-- `JENKINS_BASE`, `JENKINS_USER`, `JENKINS_TOKEN`
+- `CONFLUENCE_PAGE_ID` (single parent page for both AOS and PC from the link) (https://confluence.eng.nutanix.com:8443/spaces/~<User-Name>/pages/`569444493`/CVM+GoldImage+GI+Releases)
+- `JENKINS_BASE`, `JENKINS_USER`, `JENKINS_TOKEN` (https://phx-p10y-jenkins-master-prod-2.p10y.eng.nutanix.com/user/<USer-name>/configure)
 - `CURSOR_API_KEY` (required for `agent_runner.py`) (https://cursor.com/dashboard/api?section=user-keys#user-api-keys)
 
 Also set Artifactory and SFTP variables if RPM/changelog upload stages are enabled.
 
 > Never commit `tools/.env`.
+
+## Predefined .env parameters
+```
+Below data required for SFTP upload of generated report to Hoth server. 
+SFTP_HOST=upload.hoth.corp.nutanix.com
+
+upload.uranus.corp.nutanix.com
+SFTP_USERNAME=
+SFTP_PASSWORD=
+SFTP_PORT=22
+BASE_URL=https://hoth.corp.nutanix.com/security/<Specific -Dir>
+SFTP_REMOTE_PATH=/mnt/phxitafsprd1/security/security/<Specific -Dir>
+#/public_html/GoldImage/
+
+
+Conflunence page IDs for AOS and PC release notes. These are used by the agent to fetch the latest release notes and include them in the report.
+CONFLUENCE_PAGE_ID=
+
+CURSOR API key for fetching relevant code snippets from the codebase. This is used by the agent to provide more context in the report by including relevant code snippets.
+CURSOR_API_KEY=
+
+Repository information for fetching code snippets and other relevant data.
+DEFAULT_REPO=nugerrit.ntnxdpro.com/main
+GITHUB_REPO=github.com/nutanix-core/aos-goldimage-os
+
+Artifactory information for fetching RPMs and other build artifacts.
+ARTIFACTORY_BASE=https://artifactory.dyn.ntnxdpro.com:443/artifactory/local-canaveral-generic/nutanix-core/aos-goldimage/os/build-artifacts/{build_num}
+ARTIFACTORY_API_STORAGE=https://artifactory.dyn.ntnxdpro.com:443/artifactory/api/storage/local-canaveral-generic/nutanix-core/aos-goldimage/os/build-artifacts/{build_num}
+USER=<nutanix_mail_id>
+ARTIFACTORY_TOKEN=
+
+Jenkins information for fetching build information and other relevant data.
+JENKINS_BASE=https://phx-p10y-jenkins-master-prod-2.p10y.eng.nutanix.com
+JENKINS_USER=<Jenkins-User-ID>
+JENKINS_TOKEN=
+
+GitHub and Sourcegraph tokens for MCP server validation. These are used by the agent to validate the connectivity and authentication with the MCP servers before starting the pipeline.
+GITHUB_TOKEN=
+SOURCEGRAPH_TOKEN=
+CONFLUENCE_TOKEN=
+JIRA_TOKEN=
+```
 
 ## Usage
 

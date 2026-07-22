@@ -102,7 +102,8 @@ Rules:
   on endor.
 - COUNT HANDLING (critical):
   - When the user specifies a number (e.g. "last 5", "3 releases"), set count
-    to that number.
+    to that number and set since_confluence=true so Confluence is always
+    looked up first.
   - IMPORTANT UPDATE INTENT RULE:
     - If the mission also requests upload/update/push/publish to Confluence,
       treat "last release", "latest release", or "last 1 release" as
@@ -296,16 +297,13 @@ def _mission_has_latest_single_intent(mission):
 
 
 def normalize_steps_for_update_intent(steps, mission):
-    """Safety net for decomposition drift in update-intent missions.
+    """Safety net to enforce Confluence-first release lookups.
 
-    If user asks to update/push/publish to Confluence and wording implies
-    singular latest/last release, force release_query to use Confluence-based
-    delta mode by setting since_confluence=true and removing count=1.
+    Every release_query step is forced to include since_confluence=true.
+    For update-intent singular latest/last requests, count=1 is removed so
+    incremental delta is fully Confluence-driven.
     """
     if not steps:
-        return steps
-    if not (_mission_has_update_intent(mission)
-            and _mission_has_latest_single_intent(mission)):
         return steps
 
     changed = False
@@ -313,14 +311,18 @@ def normalize_steps_for_update_intent(steps, mission):
         if step.get("tool") != "release_query":
             continue
         params = step.setdefault("params", {})
-        if params.get("count") == 1 and not params.get("since_confluence"):
-            params.pop("count", None)
+        if not params.get("since_confluence"):
             params["since_confluence"] = True
+            changed = True
+        if (_mission_has_update_intent(mission)
+                and _mission_has_latest_single_intent(mission)
+                and params.get("count") == 1):
+            params.pop("count", None)
             changed = True
 
     if changed:
-        print("[Runner] Normalized steps: update-intent latest request "
-              "uses since_confluence=true (count removed).")
+        print("[Runner] Normalized steps: forcing Confluence-first lookup "
+              "for release_query step(s).")
     return steps
 
 

@@ -48,8 +48,6 @@ Also set Artifactory and SFTP variables if RPM/changelog upload stages are enabl
 ```
 Below data required for SFTP upload of generated report to Hoth server. 
 SFTP_HOST=upload.hoth.corp.nutanix.com
-
-upload.uranus.corp.nutanix.com
 SFTP_USERNAME=
 SFTP_PASSWORD=
 SFTP_PORT=22
@@ -97,7 +95,7 @@ python3 release_query.py --branch master --count 5
 # Auto-count mode (count omitted): fetch only releases newer than Confluence latest
 python3 release_query.py --branch ganges-7.6 --filter all
 
-# Explicitly force Confluence-based auto-count even when count is given
+# Explicitly force Confluence lookup first even when count is given
 python3 release_query.py --branch master --count 10 --since-confluence
 
 # View-only output (skip SFTP + endor publish + Confluence upload)
@@ -115,9 +113,9 @@ Supported flags:
 | Flag | Description |
 |---|---|
 | `--branch` | Target branch (default `master`) |
-| `--count` | Number of releases; when omitted, auto-counts from Confluence baseline |
-| `--since-confluence` | Force Confluence-based auto-count logic |
-| `--filter all\|aos\|pc` | Release type filter |
+| `--count` | Number of releases to return; with `--filter all`, count is per type (AOS + PC) |
+| `--since-confluence` | Force Confluence lookup first; with explicit `--count`, still honors requested count |
+| `--filter all\|aos\|pc` | Release type filter (`all` returns up to N per type) |
 | `--format table\|markdown\|json` | Output format |
 | `--output PATH` | Save JSON output |
 | `--validate-urls` | HEAD-check generated changelog/RPM URLs |
@@ -149,6 +147,7 @@ Runner behavior:
 
 - If no mission is provided, it starts interactive mode.
 - It validates tokens before executing steps.
+- It enforces Confluence-first lookup for `release_query` steps.
 - It prints stage-wise pipeline status and discrepancies at the end.
 
 #### Interactive mode (recommended for ad-hoc runs)
@@ -210,9 +209,12 @@ Pipeline runs also print a stage summary (extracted rows, CI checks, RPM/changel
 
 ## Confluence behavior
 
-- Uses a single parent page (`CONFLUENCE_PAGE_ID`) for both AOS and PC.
-- Auto-routes to branch/type-specific child pages under the same parent.
+- Uses `AOS_CONFLUENCE_PAGE_ID` and `PC_CONFLUENCE_PAGE_ID` when configured
+  (falls back to `CONFLUENCE_PAGE_ID`).
+- Auto-routes to branch/type-specific child pages under the resolved parent page.
 - Deduplicates by GoldImage version and keeps newest-first ordering.
+- In lookup mode, Confluence latest entries are used as baseline context before
+  release extraction.
 
 Final output Confluence page:
 

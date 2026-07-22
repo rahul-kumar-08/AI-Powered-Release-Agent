@@ -2581,13 +2581,26 @@ Examples:
         computed, _confluence_versions, _skipped_types = _compute_count_from_confluence(
             args.branch, args.filter, server_key)
         if computed is not None and computed >= 0:
-            effective_count = computed if computed > 0 else 0
-            Log.info(f"Auto-count resolved: {effective_count} new release(s) "
+            computed_new = computed if computed > 0 else 0
+            Log.info(f"Auto-count resolved: {computed_new} new release(s) "
                      f"since last Confluence update")
+            if args.count is not None:
+                # Explicit user count should be honored; Confluence lookup is used
+                # as baseline context, not a hard cap.
+                effective_count = args.count
+                Log.info("Confluence baseline checked: "
+                         f"{computed_new} new release(s) found; honoring requested count={args.count}")
+            else:
+                effective_count = computed_new
         else:
-            effective_count = DEFAULT_COUNT
-            Log.info(f"Confluence lookup failed or empty — "
-                     f"falling back to default count: {effective_count}")
+            if args.count is not None:
+                effective_count = args.count
+                Log.info("Confluence lookup failed or empty — "
+                         f"honoring requested count: {effective_count}")
+            else:
+                effective_count = DEFAULT_COUNT
+                Log.info(f"Confluence lookup failed or empty — "
+                         f"falling back to default count: {effective_count}")
     else:
         effective_count = args.count
 
@@ -2621,9 +2634,11 @@ Examples:
     Log.info(f"Fetching releases: branch={args.branch}, count={effective_count}, "
              f"filter={args.filter}")
 
-    # Fetch count+1 so the previous release is always available for
-    # the last displayed row (needed for previous_release, old_rpm diff, etc.)
+    # Fetch extra history so the previous release is available for diffs and,
+    # when filter=all, per-type targets (N AOS + N PC) can be satisfied.
     fetch_count = effective_count + 1
+    if args.filter == "all":
+        fetch_count = max(fetch_count, effective_count * 3)
 
     gerrit_commits = fetch_gerrit_releases(server_key, args.branch, fetch_count)
     Log.info(f"Gerrit: {len(gerrit_commits)} commits")
@@ -2652,7 +2667,10 @@ Examples:
     # Only keep rows strictly newer than what's already on Confluence.
     # Also exclude types with no valid Confluence baseline (RHEL mismatch).
     # -----------------------------------------------------------------------
-    if _confluence_versions or _skipped_types:
+    # Apply newer-than-Confluence filtering only for true auto-delta mode
+    # (when user did not provide an explicit count).
+    apply_confluence_delta_filter = args.count is None
+    if (_confluence_versions or _skipped_types) and apply_confluence_delta_filter:
         from tools.mcp_confluence_client import parse_date as _conf_parse_date
 
         conf_versions_set = {v["version"].lower() for v in _confluence_versions.values()}
@@ -2720,7 +2738,7 @@ Examples:
     # Always keep all_rows so we can find the previous release per type
     all_rows = rows
     if args.filter == "all":
-        # Per-type slicing: take up to `count` rows from each type (AOS, PC)
+        # Per-type slicing: return up to `count` rows for each type.
         aos_rows = [r for r in rows if r.get("type", "AOS").upper() == "AOS"][:display_count]
         pc_rows = [r for r in rows if r.get("type", "AOS").upper() == "PC"][:display_count]
         rows = aos_rows + pc_rows

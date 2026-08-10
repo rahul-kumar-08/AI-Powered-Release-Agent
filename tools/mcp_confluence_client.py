@@ -568,6 +568,22 @@ def _extract_branch_version_from_row(row):
     return m.group(1) if m else ""
 
 
+def _extract_target_release_from_row(row):
+    """Extract Target Release value from Sourcegraph/Gerrit commit message."""
+    msg = str(row.get("commit_message", "") or "")
+    if not msg:
+        return ""
+    m = re.search(r"Target\s+Release\s*:\s*([^\n\r]+)", msg, re.IGNORECASE)
+    if not m:
+        return ""
+    return m.group(1).strip()
+
+
+def _extract_jira_branch_equiv_from_row(row):
+    """Extract Jira git-tracker 'JIRA Version (branch equiv)' value."""
+    return str(row.get("jira_branch_equiv", "") or "").strip()
+
+
 def _pick_best_fix_version(fix_versions, branch_ver=""):
     """Pick concrete fix version; avoid wildcard placeholders."""
     vals = [str(v).strip() for v in (fix_versions or []) if str(v).strip()]
@@ -593,8 +609,8 @@ def _pick_best_fix_version(fix_versions, branch_ver=""):
     non_wild = [v for v in vals if not _is_wildcard(v)]
     if non_wild:
         return non_wild[0]
-    # Strict mode: never write wildcard placeholder versions.
-    return ""
+    # If Jira has only wildcard-style Fix Version/s, keep Jira value.
+    return vals[0]
 
 
 def _fetch_epic_fix_version(server_key, epic_key, cache, branch_ver=""):
@@ -679,7 +695,7 @@ def _release_column_kind(header_name):
         return "pc"
     if key in aos_keys:
         return "aos"
-    if key in ("releases", "releaseversion") or key.endswith("releases"):
+    if key in ("release", "releases", "releaseversion") or key.endswith("releases"):
         return "generic"
     return "none"
 
@@ -729,6 +745,9 @@ def _row_to_cells_by_columns(row, columns, release_values=None):
                 cells.append(generic_release_value or pc_release_value or aos_release_value or "")
         elif key in ("mergedate", "date"):
             cells.append(merge_date)
+        elif key in ("status", "state", "mergestatus"):
+            status_value = str(row.get("status", row.get("release_status", "Merged"))).strip()
+            cells.append(status_value or "Merged")
         elif key in ("notes",):
             cells.append(notes)
         else:
@@ -808,6 +827,21 @@ def _ticket_cols_from_columns(columns):
                 or ("main" in key and "jira" in key)):
             ticket_cols.add(idx)
     return ticket_cols
+
+
+def _is_blank_release_value(value):
+    """Treat empty/placeholder release values as blank."""
+    s = str(value or "").strip()
+    if s in ("", "--", "N/A", "na", "None"):
+        return True
+    # Treat wildcard Jira placeholders as replaceable.
+    return bool(re.search(r"(^|[.\-_])x($|[.\-_])", s.lower()))
+
+
+def _is_blank_status_value(value):
+    """Treat empty/placeholder status values as blank."""
+    s = str(value or "").strip()
+    return s in ("", "--", "N/A", "na", "None")
 
 
 def extract_existing_versions(page_content):
@@ -1124,6 +1158,31 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
 
     new_cells = []
     skipped = 0
+    backfilled = 0
+    version_to_row_idx = {}
+    if existing_columns and existing_cells:
+        for idx, row_cells in enumerate(existing_cells):
+            ver_candidates = []
+            if version_col_idx < len(row_cells):
+                ver_candidates.append(row_cells[version_col_idx].strip())
+            inferred = _extract_version_from_row(row_cells)
+            if inferred:
+                ver_candidates.append(inferred)
+            for ver in ver_candidates:
+                nver = _normalize_version(ver)
+                if nver and nver not in version_to_row_idx:
+                    version_to_row_idx[nver] = idx
+
+    release_col_indices = []
+    status_col_indices = []
+    if existing_columns:
+        for i, col in enumerate(existing_columns):
+            kind = _release_column_kind(col)
+            if kind != "none":
+                release_col_indices.append((i, kind))
+            if _header_key(col) in ("status", "state", "mergestatus"):
+                status_col_indices.append(i)
+
     for row in rows:
         if existing_columns:
             row_type = str(row.get("type", "")).upper()
@@ -1132,10 +1191,16 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
                 row.get("aos_release", row.get("AOS_release", ""))
             ).strip()
 
-            if has_pc_releases_col:
+            # Populate PC release value for both explicit PC columns and
+            # generic "Release" columns when handling PC rows.
+            if row_type == "PC" and (has_pc_releases_col or has_generic_releases_col):
                 pc_release_value = str(
                     row.get("pc_release", row.get("PC_release", "")) or ""
                 ).strip()
+                if not pc_release_value:
+                    pc_release_value = _extract_jira_branch_equiv_from_row(row)
+                if not pc_release_value:
+                    pc_release_value = _extract_target_release_from_row(row)
                 if not pc_release_value:
                     branch_ver = _extract_branch_version_from_row(row)
                     pc_release_value = _fetch_epic_fix_version(
@@ -1173,13 +1238,38 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
         ver_normalized = _normalize_version(ver_value)
         if ver_normalized in existing_versions:
             Log.info(f"  SKIP (exists): {ver_value}")
+            # Existing version may still have blank release cells; backfill them.
+            if existing_columns and release_col_indices:
+                existing_idx = version_to_row_idx.get(ver_normalized)
+                if existing_idx is not None and existing_idx < len(existing_cells):
+                    existing_row = existing_cells[existing_idx]
+                    changed = False
+                    for col_idx, col_kind in release_col_indices:
+                        if col_idx >= len(existing_row) or col_idx >= len(cells):
+                            continue
+                        if col_kind == "pc" and row.get("type", "").upper() != "PC":
+                            continue
+                        if col_kind == "aos" and row.get("type", "").upper() != "AOS":
+                            continue
+                        if _is_blank_release_value(existing_row[col_idx]) and not _is_blank_release_value(cells[col_idx]):
+                            existing_row[col_idx] = cells[col_idx]
+                            changed = True
+                    for col_idx in status_col_indices:
+                        if col_idx >= len(existing_row) or col_idx >= len(cells):
+                            continue
+                        if _is_blank_status_value(existing_row[col_idx]) and not _is_blank_status_value(cells[col_idx]):
+                            existing_row[col_idx] = cells[col_idx]
+                            changed = True
+                    if changed:
+                        backfilled += 1
+                        Log.info(f"  BACKFILL (release/status): {ver_value}")
             skipped += 1
             continue
         Log.info(f"  ADD (new):     {ver_value}")
         new_cells.append(cells)
         existing_versions.add(ver_normalized)
 
-    if not new_cells and (not force_rebuild or existing_columns):
+    if not new_cells and backfilled == 0 and (not force_rebuild or existing_columns):
         Log.info(f"No new rows to add. {skipped} already exist on page.")
         return {"added": 0, "skipped": skipped,
                 "total": len(existing_cells), "page_id": page_id}
@@ -1229,18 +1319,27 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
         Log.info("DRY RUN — page not updated")
         print(full_content)
         return {"added": len(new_cells), "skipped": skipped,
+                "backfilled": backfilled,
                 "total": len(all_cells), "page_id": page_id, "dry_run": True}
 
-    version_comment = (f"Added {len(new_cells)} release(s)"
-                       if new_cells else "Table rebuild (re-sorted)")
+    if new_cells and backfilled:
+        version_comment = f"Added {len(new_cells)} release(s), backfilled {backfilled} row(s)"
+    elif new_cells:
+        version_comment = f"Added {len(new_cells)} release(s)"
+    elif backfilled:
+        version_comment = f"Backfilled release column for {backfilled} row(s)"
+    else:
+        version_comment = "Table rebuild (re-sorted)"
     update_page_storage(server_key, page_id, page_title,
                         full_content, version_comment)
     Log.info(f"Updated page '{page_title}' (id={page_id}): "
-         f"+{len(new_cells)} rows, {skipped} skipped, {len(all_cells)} total")
+         f"+{len(new_cells)} rows, {backfilled} backfilled, "
+         f"{skipped} skipped, {len(all_cells)} total")
 
     return {
         "added": len(new_cells),
         "skipped": skipped,
+        "backfilled": backfilled,
         "total": len(all_cells),
         "page_id": page_id,
         "page_title": page_title,

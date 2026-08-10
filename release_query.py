@@ -820,10 +820,11 @@ def fetch_gerrit_cr_from_jira(ticket_keys, branch):
         branch:      query branch (e.g. "ganges-7.6" or "master").
 
     Returns:
-        dict with ``cr_url`` (str) and ``merged_date`` (ISO str or None).
-        Returns ``{"cr_url": "", "merged_date": None}`` if not found.
+        dict with ``cr_url`` (str), ``merged_date`` (ISO str or None),
+        and ``jira_branch_equiv`` (str from Jira git-tracker comment).
+        Returns empty values if not found.
     """
-    empty = {"cr_url": "", "merged_date": None}
+    empty = {"cr_url": "", "merged_date": None, "jira_branch_equiv": ""}
     jira_token = _resolve_jira_token()
     jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
     if not jira_token:
@@ -854,7 +855,8 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
                                  jira_url, jira_token):
     """Search git-tracker comments on a list of Jira tickets.
 
-    Returns list of candidate dicts with ``cr_url`` and ``merged_date``.
+    Returns list of candidate dicts with ``cr_url``, ``merged_date``,
+    and ``jira_branch_equiv``.
     Stops early once a ticket yields matches.
     """
     candidates = []
@@ -898,6 +900,7 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
                 candidates.append({
                     "cr_url": cr_match.group(1),
                     "merged_date": comment_created or None,
+                    "jira_branch_equiv": jira_ver,
                 })
 
         if candidates:
@@ -1926,7 +1929,7 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
             if epic_key not in keys:
                 keys.append(epic_key)
         if not keys:
-            return ver, {"cr_url": "", "merged_date": None}
+            return ver, {"cr_url": "", "merged_date": None, "jira_branch_equiv": ""}
         cache_key = tuple(sorted(keys))
         if cache_key in cr_cache:
             return ver, cr_cache[cache_key]
@@ -1939,7 +1942,7 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
         futures = {pool.submit(_fetch_cr_for_row, r): r for r in rows}
         for fut in as_completed(futures):
             ver, result = fut.result()
-            if result.get("cr_url") or result.get("merged_date"):
+            if result.get("cr_url") or result.get("merged_date") or result.get("jira_branch_equiv"):
                 cr_data[ver] = result
 
     generated = []
@@ -1956,6 +1959,8 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
             vdata = cr_data[version]
             if vdata.get("cr_url"):
                 row["gerrit_cr_url"] = vdata["cr_url"]
+            if vdata.get("jira_branch_equiv"):
+                row["jira_branch_equiv"] = vdata["jira_branch_equiv"]
 
         build_num = _extract_build_number(
             row.get(ci_key, {}).get("url", ""))
@@ -2275,6 +2280,7 @@ def _resolve_merge_dates_from_jira(rows, branch):
             continue
         jira_merged = merged_map[ver]["merged_date"]
         cr_url = merged_map[ver].get("cr_url", "")
+        jira_branch_equiv = merged_map[ver].get("jira_branch_equiv", "")
         formatted = format_merge_date(jira_merged)
         if formatted != "N/A":
             row["merge_date"] = formatted
@@ -2282,6 +2288,8 @@ def _resolve_merge_dates_from_jira(rows, branch):
             row["gerrit_date"] = jira_merged
             if cr_url:
                 row["gerrit_cr_url"] = cr_url
+            if jira_branch_equiv:
+                row["jira_branch_equiv"] = jira_branch_equiv
             updated += 1
 
     Log.info(f"CR merged dates resolved: {updated}/{len(rows)} rows updated from Jira")

@@ -52,6 +52,20 @@ except ImportError:
 TOOL_PREFIX = "atlassian__"
 
 
+def _write_server_key(server_key):
+    """Use dedicated write endpoint key for Atlassian server."""
+    if server_key == "atlassian":
+        return "atlassian-write"
+    return f"{server_key}-write"
+
+
+def _tool_prefix_for_server(server_key):
+    """Resolve MCP tool prefix from server key."""
+    if server_key == "atlassian-write":
+        return "atlassian-write__"
+    return TOOL_PREFIX
+
+
 def _extract_text(result):
     parts = []
     for p in result.get("content", []):
@@ -108,13 +122,16 @@ def get_page_content(server_key, page_id):
 
 
 def create_page(server_key, space_key, title, content, parent_id):
-    result = _mcp_call_tool(server_key, f"{TOOL_PREFIX}confluence_create_page", {
+    write_server_key = _write_server_key(server_key)
+    write_tool_prefix = _tool_prefix_for_server(write_server_key)
+    payload = {
         "space_key": space_key,
         "title": title,
         "content": content,
         "parent_id": str(parent_id),
         "content_format": "markdown",
-    })
+    }
+    result = _mcp_call_tool(write_server_key, f"{write_tool_prefix}confluence_create_page", payload)
     text = _extract_text(result)
     m = re.search(r'"id"\s*:\s*"?(\d+)"?', text)
     page_id = m.group(1) if m else None
@@ -123,26 +140,32 @@ def create_page(server_key, space_key, title, content, parent_id):
 
 
 def update_page(server_key, page_id, title, content, version_comment=""):
-    result = _mcp_call_tool(server_key, f"{TOOL_PREFIX}confluence_update_page", {
+    write_server_key = _write_server_key(server_key)
+    write_tool_prefix = _tool_prefix_for_server(write_server_key)
+    payload = {
         "page_id": str(page_id),
         "title": title,
         "content": content,
         "content_format": "markdown",
         "is_minor_edit": False,
         "version_comment": version_comment or "Release table update",
-    })
+    }
+    result = _mcp_call_tool(write_server_key, f"{write_tool_prefix}confluence_update_page", payload)
     return _extract_text(result)
 
 
 def update_page_storage(server_key, page_id, title, content, version_comment=""):
-    result = _mcp_call_tool(server_key, f"{TOOL_PREFIX}confluence_update_page", {
+    write_server_key = _write_server_key(server_key)
+    write_tool_prefix = _tool_prefix_for_server(write_server_key)
+    payload = {
         "page_id": str(page_id),
         "title": title,
         "content": content,
         "content_format": "storage",
         "is_minor_edit": False,
         "version_comment": version_comment or "Release table update",
-    })
+    }
+    result = _mcp_call_tool(write_server_key, f"{write_tool_prefix}confluence_update_page", payload)
     return _extract_text(result)
 
 
@@ -472,6 +495,321 @@ def _clean_cell_backticks(cell):
     return cell
 
 
+def _extract_existing_columns(page_content):
+    """Extract table header columns from markdown or storage-format content."""
+    # Markdown table header
+    for line in page_content.split("\n"):
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+        if len(cells) >= 5 and any("goldimage" in c.lower() for c in cells):
+            return cells
+
+    # XHTML storage format header
+    m = re.search(r"<thead[^>]*>(.*?)</thead>", page_content, re.DOTALL | re.IGNORECASE)
+    if m:
+        th_values = re.findall(r"<th[^>]*>(.*?)</th>", m.group(1), re.DOTALL | re.IGNORECASE)
+        cols = [_strip_html(v).strip() for v in th_values]
+        if len(cols) >= 5 and any("goldimage" in c.lower() for c in cols):
+            return cols
+
+    return None
+
+
+def _header_key(name):
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
+def _extract_fix_version_from_jira_text(text):
+    """Extract first fixVersion name from Jira response text."""
+    try:
+        data = json.loads(text)
+        issues = data.get("issues", []) if isinstance(data, dict) else []
+        if issues:
+            issue = issues[0]
+            fields = issue.get("fields", {}) if isinstance(issue, dict) else {}
+            fix_versions = (
+                fields.get("fixVersions", [])
+                or fields.get("fix_versions", [])
+                or issue.get("fixVersions", [])
+                or issue.get("fix_versions", [])
+            )
+            for fv in fix_versions:
+                if isinstance(fv, dict) and fv.get("name"):
+                    return str(fv["name"]).strip()
+                if isinstance(fv, str) and fv.strip():
+                    return fv.strip()
+    except Exception:
+        pass
+
+    m = re.search(r'"fixVersions"\s*:\s*\[(.*?)\]', text, re.DOTALL)
+    if not m:
+        m = re.search(r'"fix_versions"\s*:\s*\[(.*?)\]', text, re.DOTALL)
+        if not m:
+            return ""
+    block = m.group(1)
+    n = re.search(r'"name"\s*:\s*"([^"]+)"', block)
+    if n:
+        return n.group(1).strip()
+    # Fallback for list-of-strings format: "fix_versions": ["pc.x.x.x.12","pc.7.5.2"]
+    str_vals = re.findall(r'"([^"]+)"', block)
+    return str_vals[0].strip() if str_vals else ""
+
+
+def _extract_branch_version_from_row(row):
+    """Extract x.y branch version from notes/version fields."""
+    notes = str(row.get("notes", "")).strip()
+    m = re.search(r"ganges-([\d.]+)", notes)
+    if m:
+        return m.group(1)
+    ver = str(row.get("goldimage_version", row.get("ver", ""))).strip()
+    m = re.search(r"ganges-(?:pc\.)?([\d.]+)-", ver)
+    return m.group(1) if m else ""
+
+
+def _pick_best_fix_version(fix_versions, branch_ver=""):
+    """Pick concrete fix version; avoid wildcard placeholders."""
+    vals = [str(v).strip() for v in (fix_versions or []) if str(v).strip()]
+    if not vals:
+        return ""
+
+    def _is_wildcard(v):
+        s = (v or "").strip().lower()
+        if not s:
+            return True
+        # Reject wildcard/placeholder style versions like pc.x.x.x.12
+        return bool(re.search(r"(^|[.\-_])x($|[.\-_])", s))
+
+    # Prefer versions matching branch (e.g. 7.5) and without wildcard 'x'.
+    if branch_ver:
+        branch_exact = [v for v in vals if branch_ver in v and not _is_wildcard(v)]
+        if branch_exact:
+            return branch_exact[0]
+        branch_any = [v for v in vals if branch_ver in v and not _is_wildcard(v)]
+        if branch_any:
+            return branch_any[0]
+
+    non_wild = [v for v in vals if not _is_wildcard(v)]
+    if non_wild:
+        return non_wild[0]
+    # Strict mode: never write wildcard placeholder versions.
+    return ""
+
+
+def _fetch_epic_fix_version(server_key, epic_key, cache, branch_ver=""):
+    """Fetch EPIC fixVersion from Jira via MCP, with per-run caching."""
+    epic_key = _normalize_ticket_key(epic_key)
+    if epic_key == "--":
+        return ""
+    cache_key = f"{epic_key}|{branch_ver or '-'}"
+    if cache_key in cache:
+        return cache[cache_key]
+
+    read_server_key = "atlassian" if "atlassian" in (server_key or "") else server_key
+    read_prefix = _tool_prefix_for_server(read_server_key)
+    fix_ver = ""
+    try:
+        result = _mcp_call_tool(read_server_key, f"{read_prefix}jira_search", {
+            "jql": f'key = "{epic_key}"',
+            "limit": 1,
+            "fields": "fixVersions,fix_versions,status,summary,key",
+        })
+        text = _extract_text(result)
+        # Prefer structured extraction so we can rank candidates.
+        candidates = []
+        try:
+            data = json.loads(text)
+            issues = data.get("issues", []) if isinstance(data, dict) else []
+            if issues:
+                issue = issues[0]
+                fields = issue.get("fields", {}) if isinstance(issue, dict) else {}
+                candidates = (
+                    fields.get("fixVersions", [])
+                    or fields.get("fix_versions", [])
+                    or issue.get("fixVersions", [])
+                    or issue.get("fix_versions", [])
+                    or []
+                )
+                # normalize dict entries to names
+                norm = []
+                for fv in candidates:
+                    if isinstance(fv, dict) and fv.get("name"):
+                        norm.append(str(fv["name"]).strip())
+                    elif isinstance(fv, str):
+                        norm.append(fv.strip())
+                candidates = [v for v in norm if v]
+        except Exception:
+            candidates = []
+
+        if candidates:
+            fix_ver = _pick_best_fix_version(candidates, branch_ver=branch_ver)
+        else:
+            raw = _extract_fix_version_from_jira_text(text)
+            fix_ver = _pick_best_fix_version([raw], branch_ver=branch_ver)
+    except Exception:
+        fix_ver = ""
+
+    cache[cache_key] = fix_ver
+    return fix_ver
+
+
+def _normalize_ticket_key(ticket_val):
+    """Return Jira key in canonical form (e.g. ENG-123456) or '--'."""
+    if not ticket_val:
+        return "--"
+    raw = str(ticket_val).strip()
+    if raw == "--":
+        return "--"
+    m = re.search(r"([A-Z]+-\d+)", raw)
+    return m.group(1) if m else "--"
+
+
+def _release_column_kind(header_name):
+    """Classify a release-like column as pc/aos/generic/none."""
+    key = _header_key(header_name)
+    if not key:
+        return "none"
+    if ("goldimage" in key) or ("ticket" in key) or ("note" in key):
+        return "none"
+
+    pc_keys = ("pcreleases", "pcrelease", "pcreleaseversion")
+    aos_keys = ("aosreleases", "aosrelease", "aosreleaseversion")
+    if key in pc_keys:
+        return "pc"
+    if key in aos_keys:
+        return "aos"
+    if key in ("releases", "releaseversion") or key.endswith("releases"):
+        return "generic"
+    return "none"
+
+
+def _row_to_cells_by_columns(row, columns, release_values=None):
+    """Map row fields into the existing table's column order."""
+    ver = row.get("goldimage_version", row.get("ver", ""))
+    ticket = _normalize_ticket_key(row.get("main_ticket", row.get("ticket", "--")))
+    cl_url = row.get("changelog_url", row.get("cl", ""))
+    rpm_url = row.get("rpm_url", row.get("rpm", ""))
+    tarball_url = row.get("gi_tarball_url", row.get("gi_tarball", ""))
+    merge_date = row.get("merge_date", row.get("date", "N/A"))
+    notes = row.get("notes", "")
+
+    cl_cell = cl_url if cl_url and "not found" not in cl_url.lower() else "Data not found"
+    rpm_cell = rpm_url if rpm_url and "not found" not in rpm_url.lower() else "Data not found"
+    tarball_cell = (tarball_url if tarball_url and "not found" not in tarball_url.lower()
+                    else "Data not found")
+
+    release_values = release_values or {}
+    pc_release_value = str(release_values.get("pc", "") or "").strip()
+    aos_release_value = str(release_values.get("aos", "") or "").strip()
+    generic_release_value = str(release_values.get("generic", "") or "").strip()
+
+    cells = []
+    for col in columns:
+        key = _header_key(col)
+        if key in ("goldimageversion", "goldimage", "version"):
+            cells.append(ver)
+        elif (key in ("mainticket", "ticket", "mainjira", "mainjiraticket", "mainjiraepic")
+              or ("main" in key and "ticket" in key)
+              or ("main" in key and "jira" in key)):
+            cells.append(ticket)
+        elif key in ("changelog", "changelogurl", "changeloglink"):
+            cells.append(cl_cell)
+        elif key in ("rpmlist", "rpm", "rpmurl", "rpmlink"):
+            cells.append(rpm_cell)
+        elif key in ("gitarball", "tarball", "pcvmtarball", "gitarballurl"):
+            cells.append(tarball_cell)
+        elif _release_column_kind(col) != "none":
+            col_kind = _release_column_kind(col)
+            if col_kind == "pc":
+                cells.append(pc_release_value or generic_release_value or "")
+            elif col_kind == "aos":
+                cells.append(aos_release_value or generic_release_value or "")
+            else:
+                cells.append(generic_release_value or pc_release_value or aos_release_value or "")
+        elif key in ("mergedate", "date"):
+            cells.append(merge_date)
+        elif key in ("notes",):
+            cells.append(notes)
+        else:
+            cells.append("")
+    return cells
+
+
+def _date_col_from_columns(columns):
+    for idx, col in enumerate(columns):
+        key = _header_key(col)
+        if key in ("mergedate", "date"):
+            return idx
+    return None
+
+
+def _version_col_from_columns(columns):
+    for idx, col in enumerate(columns):
+        key = _header_key(col)
+        if key in ("goldimageversion", "goldimage", "version"):
+            return idx
+    return 0
+
+
+def _url_cols_from_columns(columns):
+    url_cols = set()
+    for idx, col in enumerate(columns):
+        key = _header_key(col)
+        if key in ("changelog", "changelogurl", "changeloglink",
+                   "rpmlist", "rpm", "rpmurl", "rpmlink",
+                   "gitarball", "tarball", "pcvmtarball", "gitarballurl"):
+            url_cols.add(idx)
+    return url_cols
+
+
+def _extract_existing_rows_by_columns(page_content, columns):
+    """Extract existing table rows preserving all existing cell values."""
+    rows = []
+
+    # Markdown table rows
+    for line in page_content.split("\n"):
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+        if len(cells) < max(5, len(columns)):
+            continue
+        # Skip delimiter / header rows
+        if all(re.match(r"^[:\-]+$", c or "-") for c in cells):
+            continue
+        if any("goldimage" in c.lower() for c in cells):
+            continue
+        rows.append(cells[:len(columns)])
+
+    if rows:
+        return rows
+
+    # Storage-format rows
+    tr_blocks = re.findall(r"<tr[^>]*>(.*?)</tr>", page_content, re.DOTALL | re.IGNORECASE)
+    for tr in tr_blocks:
+        if "<th" in tr.lower():
+            continue
+        td_values = re.findall(r"<td[^>]*>(.*?)</td>", tr, re.DOTALL | re.IGNORECASE)
+        if len(td_values) < max(5, len(columns)):
+            continue
+        cells = [_strip_html(v).strip() for v in td_values[:len(columns)]]
+        rows.append(cells)
+
+    return rows
+
+
+def _ticket_cols_from_columns(columns):
+    ticket_cols = set()
+    for idx, col in enumerate(columns):
+        key = _header_key(col)
+        if (key in ("mainticket", "ticket", "mainjira", "mainjiraticket", "mainjiraepic")
+                or ("main" in key and "ticket" in key)
+                or ("main" in key and "jira" in key)):
+            ticket_cols.add(idx)
+    return ticket_cols
+
+
 def extract_existing_versions(page_content):
     """Parse table rows from existing page content (markdown or XHTML storage format).
 
@@ -536,7 +874,7 @@ def _strip_html(text):
 
 def row_to_cells(row, include_tarball=False):
     ver = row.get("goldimage_version", row.get("ver", ""))
-    ticket = row.get("main_ticket", row.get("ticket", "--"))
+    ticket = _normalize_ticket_key(row.get("main_ticket", row.get("ticket", "--")))
     cl_url = row.get("changelog_url", row.get("cl", ""))
     rpm_url = row.get("rpm_url", row.get("rpm", ""))
     merge_date = row.get("merge_date", row.get("date", "N/A"))
@@ -580,15 +918,22 @@ def _build_td(content, is_ticket=False, is_url=False):
     return f"<td>{_escape_html(str(content))}</td>"
 
 
-def build_table_storage(all_rows_cells, include_tarball=False):
+def build_table_storage(all_rows_cells, include_tarball=False, columns=None,
+                        date_col_idx=None, url_cols=None, ticket_cols=None,
+                        sort_rows=True):
     """Build a Confluence storage-format (XHTML) table with Jira Issue macros for tickets."""
-    columns = TABLE_COLUMNS_WITH_TARBALL if include_tarball else TABLE_COLUMNS
-    date_col_idx = 5 if include_tarball else 4
-    url_cols = {2, 3, 4} if include_tarball else {2, 3}
+    columns = columns or (TABLE_COLUMNS_WITH_TARBALL if include_tarball else TABLE_COLUMNS)
+    if date_col_idx is None:
+        date_col_idx = 5 if include_tarball else 4
+    if url_cols is None:
+        url_cols = {2, 3, 4} if include_tarball else {2, 3}
+    if ticket_cols is None:
+        ticket_cols = {1}
 
-    all_rows_cells.sort(
-        key=lambda r: parse_date(r[date_col_idx] if len(r) > date_col_idx else ""),
-        reverse=True)
+    if sort_rows:
+        all_rows_cells.sort(
+            key=lambda r: parse_date(r[date_col_idx] if len(r) > date_col_idx else ""),
+            reverse=True)
 
     lines = ['<table>', '<thead>', '<tr>']
     for col in columns:
@@ -599,7 +944,7 @@ def build_table_storage(all_rows_cells, include_tarball=False):
     for cells in all_rows_cells:
         lines.append("<tr>")
         for i, cell in enumerate(cells):
-            is_ticket = (i == 1)
+            is_ticket = (i in ticket_cols)
             is_url = (i in url_cols)
             lines.append(_build_td(cell, is_ticket=is_ticket, is_url=is_url))
         lines.append("</tr>")
@@ -726,31 +1071,155 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
 
     page_content = get_page_content(server_key, page_id)
     existing_versions, existing_cells = extract_existing_versions(page_content)
+    preserve_existing_layout = branch in PC_TARBALL_BRANCHES
+    existing_columns = (_extract_existing_columns(page_content)
+                        if preserve_existing_layout else None)
+    version_col_idx = 0
+    if existing_columns:
+        version_col_idx = _version_col_from_columns(existing_columns)
+        preserved_rows = _extract_existing_rows_by_columns(page_content, existing_columns)
+        if preserved_rows:
+            existing_cells = preserved_rows
+            existing_versions = set()
+            for cells in existing_cells:
+                ver_candidates = []
+                if version_col_idx < len(cells):
+                    ver_candidates.append(cells[version_col_idx].strip())
+                inferred = _extract_version_from_row(cells)
+                if inferred:
+                    ver_candidates.append(inferred)
+                for ver in ver_candidates:
+                    if ver and not re.match(r"^[-:]+$", ver):
+                        existing_versions.add(_normalize_version(ver))
+    # Safety guard: never overwrite a populated page when row extraction fails.
+    # This avoids replacing historical rows with only the incoming release set.
+    has_any_content = bool(page_content and page_content.strip())
+    looks_like_existing_table = (
+        "GoldImage Version" in page_content
+        or "<table" in page_content.lower()
+        or re.search(r"^\|.*\|$", page_content, re.MULTILINE) is not None
+    )
+    is_placeholder_page = "table pending" in page_content.lower()
+    if (has_any_content and looks_like_existing_table and not is_placeholder_page
+            and not existing_cells and not force_rebuild):
+        raise RuntimeError(
+            f"Safety stop: unable to parse existing rows on page {page_id}; "
+            "aborting update to prevent data loss. Re-run with --force-rebuild "
+            "only after validating page parsing."
+        )
     Log.info(f"Existing rows on page: {len(existing_cells)} "
          f"({len(existing_versions)} unique versions)")
 
     include_tarball = _needs_gi_tarball(branch, release_type)
+    fix_version_cache = {}
+    has_pc_releases_col = False
+    has_aos_releases_col = False
+    has_generic_releases_col = False
+    if existing_columns:
+        has_pc_releases_col = any(_release_column_kind(c) == "pc" for c in existing_columns)
+        has_aos_releases_col = any(_release_column_kind(c) == "aos" for c in existing_columns)
+        has_generic_releases_col = any(
+            _release_column_kind(c) == "generic" for c in existing_columns
+        )
 
     new_cells = []
     skipped = 0
     for row in rows:
-        cells = row_to_cells(row, include_tarball=include_tarball)
-        ver_normalized = _normalize_version(cells[0])
+        if existing_columns:
+            row_type = str(row.get("type", "")).upper()
+            pc_release_value = ""
+            aos_release_value = str(
+                row.get("aos_release", row.get("AOS_release", ""))
+            ).strip()
+
+            if has_pc_releases_col:
+                pc_release_value = str(
+                    row.get("pc_release", row.get("PC_release", "")) or ""
+                ).strip()
+                if not pc_release_value:
+                    branch_ver = _extract_branch_version_from_row(row)
+                    pc_release_value = _fetch_epic_fix_version(
+                        server_key,
+                        row.get("main_ticket", "--"),
+                        fix_version_cache,
+                        branch_ver=branch_ver,
+                    )
+            if not aos_release_value and row_type == "AOS":
+                # AOS rows can safely default to their own release version.
+                aos_release_value = str(
+                    row.get("goldimage_version", row.get("ver", ""))
+                ).strip()
+
+            generic_release_value = ""
+            if has_generic_releases_col:
+                if row_type == "PC":
+                    generic_release_value = pc_release_value
+                elif row_type == "AOS":
+                    generic_release_value = aos_release_value
+
+            cells = _row_to_cells_by_columns(
+                row,
+                existing_columns,
+                release_values={
+                    "pc": pc_release_value,
+                    "aos": aos_release_value,
+                    "generic": generic_release_value,
+                },
+            )
+        else:
+            cells = row_to_cells(row, include_tarball=include_tarball)
+        ver_idx = version_col_idx if existing_columns else 0
+        ver_value = cells[ver_idx] if ver_idx < len(cells) else (cells[0] if cells else "")
+        ver_normalized = _normalize_version(ver_value)
         if ver_normalized in existing_versions:
-            Log.info(f"  SKIP (exists): {cells[0]}")
+            Log.info(f"  SKIP (exists): {ver_value}")
             skipped += 1
             continue
-        Log.info(f"  ADD (new):     {cells[0]}")
+        Log.info(f"  ADD (new):     {ver_value}")
         new_cells.append(cells)
         existing_versions.add(ver_normalized)
 
-    if not new_cells and not force_rebuild:
+    if not new_cells and (not force_rebuild or existing_columns):
         Log.info(f"No new rows to add. {skipped} already exist on page.")
         return {"added": 0, "skipped": skipped,
                 "total": len(existing_cells), "page_id": page_id}
 
-    all_cells = existing_cells + new_cells
-    table_html = build_table_storage(all_cells, include_tarball=include_tarball)
+    # For branch-specific preserved layout pages, never rewrite existing row
+    # values. Keep existing rows unchanged and only prepend new rows.
+    if existing_columns:
+        # Keep only new rows sorted by date, then append existing rows as-is.
+        date_col_idx_new = _date_col_from_columns(existing_columns)
+        if date_col_idx_new is None:
+            date_col_idx_new = _detect_date_column(new_cells) if new_cells else None
+        if date_col_idx_new is None:
+            date_col_idx_new = 0
+        new_cells.sort(
+            key=lambda r: parse_date(r[date_col_idx_new] if len(r) > date_col_idx_new else ""),
+            reverse=True,
+        )
+        all_cells = new_cells + existing_cells
+    else:
+        all_cells = existing_cells + new_cells
+    date_col_idx = None
+    url_cols = None
+    ticket_cols = None
+    columns = None
+    if existing_columns:
+        columns = existing_columns
+        date_col_idx = _date_col_from_columns(columns)
+        url_cols = _url_cols_from_columns(columns)
+        ticket_cols = _ticket_cols_from_columns(columns)
+        if date_col_idx is None:
+            date_col_idx = _detect_date_column(all_cells)
+    table_html = build_table_storage(
+        all_cells,
+        include_tarball=include_tarball,
+        columns=columns,
+        date_col_idx=date_col_idx,
+        url_cols=url_cols,
+        ticket_cols=ticket_cols,
+        sort_rows=not bool(existing_columns),
+    )
     full_content = f"<h1>{page_title}</h1>\n{table_html}"
 
     Log.info(f"Table rebuilt: {len(new_cells)} new + {len(existing_cells)} existing "

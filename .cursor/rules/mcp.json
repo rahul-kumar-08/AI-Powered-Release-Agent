@@ -25,6 +25,16 @@
         "X-Atlassian-Confluence-Url": "https://confluence.eng.nutanix.com:8443/",
         "X-Atlassian-Confluence-Personal-Token": "${CONFLUENCE_TOKEN}"
       }
+    },
+    "atlassian-write": {
+      "url": "https://panacea-dev.eng.nutanix.com/mcp/atlassian-write",
+      "description": "gw -> atlassian write endpoint (Confluence writes)",
+      "headers": {
+        "X-Atlassian-Jira-Personal-Token": "${JIRA_TOKEN}",
+        "X-Atlassian-Jira-Url": "https://jira.nutanix.com",
+        "X-Atlassian-Confluence-Url": "https://confluence.eng.nutanix.com:8443/",
+        "X-Atlassian-Confluence-Personal-Token": "${CONFLUENCE_TOKEN}"
+      }
     }
   }
 }

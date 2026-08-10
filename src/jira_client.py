@@ -33,7 +33,11 @@ def _jira_search_rest(jql):
     if not jira_token:
         return None
 
-    params = urllib.parse.urlencode({"jql": jql, "fields": "key,summary,status", "maxResults": 100})
+    params = urllib.parse.urlencode({
+        "jql": jql,
+        "fields": "key,summary,status,fixVersions,fix_versions",
+        "maxResults": 100,
+    })
     url = f"{jira_url}/rest/api/2/search?{params}"
 
     req = urllib.request.Request(url)
@@ -49,11 +53,26 @@ def _jira_search_rest(jql):
     raw = data.get("issues", [])
     results = []
     for i in raw:
-        status_obj = i.get("fields", {}).get("status", {})
+        fields = i.get("fields", {})
+        status_obj = fields.get("status", {})
+        fix_versions_raw = (
+            fields.get("fixVersions", [])
+            or fields.get("fix_versions", [])
+            or []
+        )
+        fix_versions = []
+        for fv in fix_versions_raw:
+            if isinstance(fv, dict):
+                name = str(fv.get("name", "")).strip()
+                if name:
+                    fix_versions.append(name)
+            elif isinstance(fv, str) and fv.strip():
+                fix_versions.append(fv.strip())
         results.append({
             "key": i["key"],
-            "summary": i["fields"]["summary"],
+            "summary": fields["summary"],
             "status": status_obj.get("name", "Unknown") if status_obj else "Unknown",
+            "fix_versions": fix_versions,
         })
     return results if results else []
 
@@ -77,7 +96,35 @@ def _jira_search_mcp(jql):
         try:
             parsed = json.loads(text)
             raw = parsed.get("issues", [])
-            return [{"key": i["key"], "summary": i["summary"]} for i in raw] if raw else []
+            parsed_issues = []
+            for issue in raw:
+                fields = issue.get("fields", {}) if isinstance(issue, dict) else {}
+                fix_versions_raw = (
+                    fields.get("fixVersions", [])
+                    or fields.get("fix_versions", [])
+                    or issue.get("fixVersions", [])
+                    or issue.get("fix_versions", [])
+                    or []
+                )
+                fix_versions = []
+                for fv in fix_versions_raw:
+                    if isinstance(fv, dict):
+                        name = str(fv.get("name", "")).strip()
+                        if name:
+                            fix_versions.append(name)
+                    elif isinstance(fv, str) and fv.strip():
+                        fix_versions.append(fv.strip())
+                parsed_issues.append({
+                    "key": issue.get("key", ""),
+                    "summary": issue.get("summary", fields.get("summary", "")),
+                    "status": (
+                        fields.get("status", {}).get("name", "Unknown")
+                        if isinstance(fields.get("status", {}), dict)
+                        else "Unknown"
+                    ),
+                    "fix_versions": fix_versions,
+                })
+            return [i for i in parsed_issues if i.get("key")] if parsed_issues else []
         except (json.JSONDecodeError, KeyError):
             pass
 
@@ -88,7 +135,12 @@ def _jira_search_mcp(jql):
             sm = re.search(r'"summary"\s*:\s*"([^"]+)"', after)
             summary = sm.group(1) if sm else ""
             if key and summary:
-                issues.append({"key": key, "summary": summary})
+                issues.append({
+                    "key": key,
+                    "summary": summary,
+                    "status": "Unknown",
+                    "fix_versions": [],
+                })
         return issues if issues else None
 
     return None
@@ -132,6 +184,7 @@ def _select_epic_from_issues(issues, release_type):
         "summary": summary,
         "jira_version": jira_version,
         "status": selected.get("status", "Unknown"),
+        "fix_versions": selected.get("fix_versions", []),
     }
 
 
@@ -147,7 +200,8 @@ def search_jira_epic(version_raw, release_type):
 def search_jira_epic_full(version_raw, release_type):
     """Search Jira for the EPIC matching a GoldImage version.
 
-    Returns full details: {"key": ..., "summary": ..., "jira_version": ..., "status": ...}
+    Returns full details:
+    {"key": ..., "summary": ..., "jira_version": ..., "status": ..., "fix_versions": [...]}
     or None if not found.
     """
     jql = f'issuetype = Epic AND summary ~ "{version_raw}" ORDER BY created DESC'
@@ -398,16 +452,19 @@ def validate_version_with_jira(heading_version, file_version, release_type):
 
     epic_key = None
     jira_version = None
+    fix_versions = []
     jira_result = search_jira_epic_full(heading_version, release_type)
     if jira_result:
         epic_key = jira_result["key"]
         jira_version = jira_result["jira_version"]
+        fix_versions = jira_result.get("fix_versions", []) or []
 
     return {
         "confirmed_version": heading_version,
         "epic_key": epic_key,
         "source": "heading",
         "jira_version": jira_version,
+        "fix_versions": fix_versions,
     }
 
 

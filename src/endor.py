@@ -135,7 +135,7 @@ def publish_to_endor(rows, filter_type="all", dry_run=False, force=False):
         params = {
             "SOURCE_URL": source_url,
             "DESTINATION": destination,
-            "Force_update": "false",
+            "Force_update": force_update,
         }
 
         if dry_run:

@@ -8,12 +8,10 @@ from src.config import (
     _get_env,
     BASE_URL, GITHUB_REPO,
     ENDOR_AOS_RHEL9_MASTER, ENDOR_AOS_STS_BASE, ENDOR_AOS_RHEL8_BASE,
-    ENDOR_PC_MASTER, ENDOR_PC_STS_BASE,
+    ENDOR_PC_MASTER, ENDOR_PC_STS_BASE, PC_TARBALL_BRANCHES
 )
 from src.logger import Log
 from src.jira_client import search_jira_epic, validate_version_with_jira
-
-PC_TARBALL_BRANCHES = {"ganges-7.3", "ganges-7.5"}
 
 
 def _needs_gi_tarball(branch, release_type):
@@ -171,6 +169,42 @@ def _extract_num_suffix(v):
     """'main-ganges-7.6-rhel9.7-9.1.0' -> '9.1.0'"""
     m = re.search(r'(\d+\.\d+\.\d+)$', v)
     return m.group(1) if m else None
+
+
+def _extract_branch_version(branch):
+    """Extract x.y branch version from ganges-x.y."""
+    m = re.match(r"ganges-([\d.]+)", branch or "")
+    return m.group(1) if m else ""
+
+
+def _pick_pc_release_from_fix_versions(fix_versions, branch):
+    """Pick stable branch-matching PC release from Jira EPIC fixVersions."""
+    values = [str(v).strip() for v in (fix_versions or []) if str(v).strip()]
+    if not values:
+        return ""
+
+    branch_ver = _extract_branch_version(branch)
+
+    def _is_wildcard(val):
+        low = (val or "").lower()
+        return bool(re.search(r"(^|[.\-_])x($|[.\-_])", low))
+
+    non_wild = [v for v in values if not _is_wildcard(v)]
+    if branch_ver:
+        preferred = [
+            v for v in non_wild
+            if v.lower().startswith("pc.") and branch_ver in v
+        ]
+        if preferred:
+            return preferred[0]
+        branch_hits = [v for v in non_wild if branch_ver in v]
+        if branch_hits:
+            return branch_hits[0]
+
+    pc_non_wild = [v for v in non_wild if v.lower().startswith("pc.")]
+    if pc_non_wild:
+        return pc_non_wild[0]
+    return non_wild[0] if non_wild else ""
 
 
 def _match_gerrit_and_extract(version, gerrit_commits, excluded_titles,
@@ -376,6 +410,10 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
 
         aos_version = aos_validation["confirmed_version"] if aos_validation else None
         pc_version = pc_validation["confirmed_version"] if pc_validation else None
+        aos_release = _pick_pc_release_from_fix_versions(
+            (aos_validation or {}).get("fix_versions", []), branch)
+        pc_release = _pick_pc_release_from_fix_versions(
+            (pc_validation or {}).get("fix_versions", []), branch)
 
         if not aos_version and not pc_version:
             Log.info(f"Skipping {commit_sha[:8]}: no version in heading")
@@ -420,6 +458,7 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
                 "goldimage_version": aos_version,
                 "type": "AOS",
                 "main_ticket": aos_epic,
+                "aos_release": aos_release,
                 "changelog_url": urls["changelog"],
                 "rpm_url": urls["rpm"],
                 "merge_date": "N/A",
@@ -446,6 +485,7 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
                 "goldimage_version": pc_version,
                 "type": "PC",
                 "main_ticket": pc_epic,
+                "pc_release": pc_release,
                 "changelog_url": urls["changelog"],
                 "rpm_url": urls["rpm"],
                 "merge_date": "N/A",

@@ -72,6 +72,8 @@ Available tools and their parameters:
            no_generate_changelog (bool, default false — skip changelog generation),
            no_upload (bool, default false — skip SFTP, Jenkins endor, and Confluence),
            force_publish_endor (bool, default false — force republish to endor),
+           force_rebuild_confluence (bool, default false — force Confluence rebuild
+                  and keep latest release in pipeline so SFTP/Hoth re-upload runs),
            validate_urls (bool, default false — HEAD-check URLs),
            rpm_dir (string, optional — directory for downloaded RPM files)
 
@@ -100,6 +102,10 @@ Rules:
 - If the user says "force", "forcefully", "force update", or "forcefully update",
   set force_publish_endor=true to re-publish even if the version already exists
   on endor.
+- For force update intents that should also re-upload files to Hoth/SFTP,
+  prefer release_query with force_rebuild_confluence=true.
+- Use confluence_update only when the user explicitly asks to update from an
+  existing JSON file without running the full pipeline.
 - COUNT HANDLING (critical):
   - When the user specifies a number (e.g. "last 5", "3 releases"), set count
     to that number and set since_confluence=true so Confluence is always
@@ -213,7 +219,7 @@ def decompose_mission(mission, cursor_key, verbose=False):
             full_prompt,
             AgentOptions(
                 api_key=cursor_key,
-                model="claude-sonnet-4",
+                model="default",
             ),
         )
         print(f"[Cursor SDK] Agent returned status: {result.status}")
@@ -362,6 +368,8 @@ def run_release_query(params):
         cmd.append("--no-upload")
     if params.get("force_publish_endor"):
         cmd.append("--force-publish-endor")
+    if params.get("force_rebuild_confluence"):
+        cmd.append("--force-rebuild-confluence")
     if params.get("validate_urls"):
         cmd.append("--validate-urls")
     return run_subprocess(cmd, stream=True)

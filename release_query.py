@@ -2081,26 +2081,59 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
 
             for filename, url_key in file_pairs:
                 url = row.get(url_key, "")
-                if not url or url == "Data not found":
+                if not url:
+                    Log.info(f"[{rtype}] SKIP {filename} for {version}: "
+                             f"missing '{url_key}' URL")
+                    continue
+                if url == "Data not found":
+                    Log.info(f"[{rtype}] SKIP {filename} for {version}: "
+                             f"'{url_key}' is Data not found")
                     continue
 
                 local_path = os.path.join(output_dir, version, rtype, filename)
                 if not os.path.isfile(local_path):
                     if filename == "pcvm.tar.xz":
-                        Log.error(f"[{rtype}] {filename} not found locally at "
-                                  f"{local_path} — Artifactory download may have failed")
+                        Log.error(f"[{rtype}] SKIP {filename} for {version}: "
+                                  f"not found locally at {local_path} "
+                                  f"(Artifactory download may have failed)")
+                    else:
+                        Log.info(f"[{rtype}] SKIP {filename} for {version}: "
+                                 f"not found locally at {local_path}")
                     continue
 
-                relative = url.replace(BASE_URL, "").lstrip("/")
+                relative = ""
+                if BASE_URL and url.startswith(BASE_URL):
+                    relative = url.replace(BASE_URL, "", 1).lstrip("/")
+                else:
+                    parsed = parse.urlparse(url)
+                    relative = (parsed.path or "").lstrip("/")
+                    if parsed.netloc:
+                        Log.info(f"[{rtype}] SFTP path fallback for {version}: "
+                                 f"BASE_URL mismatch, using URL path from host '{parsed.netloc}'")
+                if not relative:
+                    Log.error(f"[{rtype}] SKIP {filename} for {version}: "
+                              f"unable to derive remote path from URL '{url}'")
+                    continue
                 if remote_base:
                     remote_path = f"{remote_base.rstrip('/')}/{relative}"
                 else:
                     remote_path = relative
 
                 remote_dir = os.path.dirname(remote_path)
-                _sftp_makedirs(sftp, remote_dir)
+                try:
+                    _sftp_makedirs(sftp, remote_dir)
+                except Exception as e:
+                    Log.error(f"[{rtype}] SKIP {filename} for {version}: "
+                              f"failed to create/check remote dir '{remote_dir}': {e}")
+                    continue
 
-                sftp.put(local_path, remote_path)
+                try:
+                    sftp.put(local_path, remote_path)
+                except Exception as e:
+                    Log.error(f"[{rtype}] SKIP {filename} for {version}: "
+                              f"SFTP put failed to '{remote_path}': {e}")
+                    continue
+
                 uploaded.append({
                     "rtype": rtype, "version": version,
                     "file": filename, "remote_path": remote_path,
@@ -2122,7 +2155,7 @@ def upload_to_sftp(rows, output_dir, filter_type="all"):
 # Confluence Upload
 # ---------------------------------------------------------------------------
 
-def upload_to_confluence(rows, branch, filter_type="all"):
+def upload_to_confluence(rows, branch, filter_type="all", force_rebuild=False):
     """Upload release rows to Confluence using a single parent page.
 
     Reads ``CONFLUENCE_PAGE_ID`` from ``tools/.env``. Both AOS and PC
@@ -2163,7 +2196,7 @@ def upload_to_confluence(rows, branch, filter_type="all"):
                 branch=branch,
                 rows=type_rows,
                 release_type=rtype,
-                force_rebuild=False,
+                force_rebuild=force_rebuild,
                 dry_run=False,
             )
             result["release_type"] = rtype
@@ -2538,6 +2571,9 @@ Examples:
                         help="Skip SFTP upload, Jenkins endor publish, and Confluence upload")
     parser.add_argument("--force-publish-endor", action="store_true",
                         help="Force republish to endor even if already present")
+    parser.add_argument("--force-rebuild-confluence", action="store_true",
+                        help="Force Confluence table rebuild; also keep one latest release "
+                             "in pipeline for Hoth/SFTP re-upload even when no new releases")
     _default_rpm_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "releases"
     )
@@ -2604,6 +2640,11 @@ Examples:
     else:
         effective_count = args.count
 
+    if effective_count == 0 and args.force_rebuild_confluence:
+        Log.info("No new releases found, but --force-rebuild-confluence is set; "
+                 "processing latest release for rebuild/re-upload flow.")
+        effective_count = 1
+
     if effective_count == 0:
         Log.info("No new releases found since last Confluence update — "
                  "skipping pipeline.")
@@ -2656,6 +2697,10 @@ Examples:
         server_key, github_commits, gerrit_commits, github_epics,
         args.branch, args.filter,
     )
+    # Keep full fetched history for previous-release mapping and RPM diffs.
+    # Output rows may later be filtered/sliced (e.g. since-Confluence mode),
+    # but previous-release context must still come from the unfiltered timeline.
+    history_rows = list(rows)
 
     # Resolve authoritative CR merged dates from Jira git-tracker comments.
     # The git-tracker bot posts a comment immediately when the CR is merged
@@ -2669,7 +2714,7 @@ Examples:
     # -----------------------------------------------------------------------
     # Apply newer-than-Confluence filtering only for true auto-delta mode
     # (when user did not provide an explicit count).
-    apply_confluence_delta_filter = args.count is None
+    apply_confluence_delta_filter = args.count is None and not args.force_rebuild_confluence
     if (_confluence_versions or _skipped_types) and apply_confluence_delta_filter:
         from tools.mcp_confluence_client import parse_date as _conf_parse_date
 
@@ -2735,8 +2780,9 @@ Examples:
             return
 
     display_count = effective_count
-    # Always keep all_rows so we can find the previous release per type
-    all_rows = rows
+    # Keep full history rows for previous-release detection even when output
+    # rows are filtered to "new since Confluence".
+    all_rows = history_rows
     if args.filter == "all":
         # Per-type slicing: return up to `count` rows for each type.
         aos_rows = [r for r in rows if r.get("type", "AOS").upper() == "AOS"][:display_count]
@@ -2903,7 +2949,10 @@ Examples:
     # Upload release table to Confluence
     if args.upload_confluence:
         Log.info("Uploading release table to Confluence...")
-        confluence_results = upload_to_confluence(rows, args.branch, args.filter)
+        confluence_results = upload_to_confluence(
+            rows, args.branch, args.filter,
+            force_rebuild=args.force_rebuild_confluence,
+        )
         total_added = sum(r.get("added", 0) for r in confluence_results)
         total_skipped = sum(r.get("skipped", 0) for r in confluence_results)
         Log.info(f"Confluence upload complete: {total_added} added, {total_skipped} already exist")

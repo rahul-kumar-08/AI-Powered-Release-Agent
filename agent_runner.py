@@ -524,6 +524,20 @@ def _extract_discrepancies(stderr):
     return lines
 
 
+def _extract_error_summary(error_text):
+    """Prefer an [ERROR] line for FAILED summaries."""
+    text = error_text or ""
+    if not text:
+        return ""
+    for line in text.splitlines():
+        if "[ERROR]" in line:
+            return line.strip()
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return text.strip()
+
+
 
 
 _STAGE_PATTERNS = [
@@ -640,7 +654,8 @@ def dispatch_steps(steps, dry_run=False, fail_fast=False, verbose=False):
                 print(stdout)
         else:
             err = result.get("error") or stderr
-            print("  FAILED: %s" % err[:500])
+            err_summary = _extract_error_summary(err)
+            print("  FAILED: %s" % err_summary[:500])
             if fail_fast:
                 print("  --fail-fast: aborting.")
                 results.append({"step": step_num, "tool": tool, "ok": False,

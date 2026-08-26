@@ -98,7 +98,28 @@ ENDOR_PC_STS_BASE = f"{_BASE}/GoldImages/PC_GoldImages/pc"
 _pipeline_stats = {}
 
 
-def _print_pipeline_status():
+def _record_validation_bypass(version, rtype, gate, reason):
+    """Record a bypassed release with gate and reason for final reporting."""
+    items = _pipeline_stats.setdefault("validation_bypassed", [])
+    items.append({
+        "GoldImage Version": version or "unknown",
+        "Type": (rtype or "AOS"),
+        "Validation Gate": gate or "unknown",
+        "Reason": reason or "unspecified",
+    })
+
+
+def _record_pipeline_issue(stage, issue, error_code="PIPELINE_RUNTIME_ERROR"):
+    """Record pipeline-level issues for final reporting."""
+    items = _pipeline_stats.setdefault("pipeline_issues", [])
+    items.append({
+        "Stage": stage or "unknown",
+        "Error Code": error_code or "PIPELINE_RUNTIME_ERROR",
+        "Issue": issue or "unspecified",
+    })
+
+
+def _print_pipeline_status(force=False):
     """Print a summary table of all pipeline stages and their results."""
     s = _pipeline_stats
     if not s:
@@ -131,6 +152,30 @@ def _print_pipeline_status():
         stages.append(("RPM Download", f"{s['rpm_downloaded']} file(s) downloaded"))
     if "changelogs" in s:
         stages.append(("Changelog", f"{s['changelogs']} file(s) generated"))
+    if ("epic_gate_kept" in s or "epic_gate_removed" in s):
+        kept = s.get("epic_gate_kept", 0)
+        removed = s.get("epic_gate_removed", 0)
+        unknown = s.get("epic_gate_unknown", 0)
+        stages.append(("EPIC Status Gate",
+                       f"{kept} kept (Closed/Resolved), {removed} removed (others), {unknown} unknown"))
+    if ("git_tracker_gate_kept" in s or "git_tracker_gate_removed" in s):
+        gk = s.get("git_tracker_gate_kept", 0)
+        gr = s.get("git_tracker_gate_removed", 0)
+        gv = s.get("git_tracker_gate_validated", 0)
+        stages.append(("Git Tracker Gate",
+                       f"{gk} kept, {gr} removed, {gv} checked"))
+    if "pipeline_issues" in s:
+        stages.append(("Pipeline Issues", f"{len(s.get('pipeline_issues', []))} issue(s) reported"))
+    if ("changelog_validation_field_passed" in s
+            or "changelog_validation_epic_passed" in s):
+        fp = s.get("changelog_validation_field_passed", 0)
+        fs = s.get("changelog_validation_field_skipped", 0)
+        ep = s.get("changelog_validation_epic_passed", 0)
+        es = s.get("changelog_validation_epic_skipped", 0)
+        stages.append(
+            ("Changelog Validation",
+             f"fields: {fp} passed, {fs} skipped | epic: {ep} passed, {es} skipped")
+        )
     if "sftp_uploaded" in s:
         stages.append(("SFTP Upload", f"{s['sftp_uploaded']} file(s) uploaded"))
     if "endor_published" in s or "endor_skipped" in s:
@@ -154,7 +199,7 @@ def _print_pipeline_status():
     elif s.get("confluence_skipped_flag"):
         stages.append(("Confluence", "skipped (--no-upload-confluence)"))
 
-    if os.environ.get("_RELEASE_AGENT_SUBPROCESS"):
+    if os.environ.get("_RELEASE_AGENT_SUBPROCESS") and not force:
         return
 
     
@@ -162,6 +207,23 @@ def _print_pipeline_status():
     print(f"\n{'=' * 26} PIPELINE STATUS {'=' * 26}", file=sys.stderr)
     print(df.to_markdown(index=False, tablefmt="simple"), file=sys.stderr)
     print("-" * 68, file=sys.stderr)
+
+    bypassed = s.get("validation_bypassed", [])
+    if bypassed:
+        bdf = pd.DataFrame(
+            bypassed,
+            columns=["GoldImage Version", "Type", "Validation Gate", "Reason"],
+        )
+        print(f"\n{'=' * 20} VALIDATION BYPASS REPORT {'=' * 20}", file=sys.stderr)
+        print(bdf.to_markdown(index=False, tablefmt="simple"), file=sys.stderr)
+        print("-" * 68, file=sys.stderr)
+
+    issues = s.get("pipeline_issues", [])
+    if issues:
+        idf = pd.DataFrame(issues, columns=["Stage", "Error Code", "Issue"])
+        print(f"\n{'=' * 22} PIPELINE ISSUE REPORT {'=' * 22}", file=sys.stderr)
+        print(idf.to_markdown(index=False, tablefmt="simple"), file=sys.stderr)
+        print("-" * 68, file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -974,6 +1036,40 @@ def _fetch_epic_children(epic_keys, jira_url, jira_token):
     return children
 
 
+def _fetch_epic_description_ticket_keys(epic_key, jira_url, jira_token):
+    """Extract Jira ticket keys from an EPIC's description field."""
+    if not re.match(r'^[A-Z]+-\d+$', epic_key):
+        return []
+    try:
+        url = f"{jira_url}/rest/api/2/issue/{epic_key}?fields=description"
+        req = Request(url)
+        req.add_header("Authorization", f"Bearer {jira_token}")
+        req.add_header("Content-Type", "application/json")
+        with urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return []
+
+    desc = data.get("fields", {}).get("description", "")
+    if isinstance(desc, dict) or isinstance(desc, list):
+        desc_text = json.dumps(desc)
+    else:
+        desc_text = str(desc or "")
+
+    keys = []
+    seen = set()
+    for key in re.findall(r"\b[A-Z][A-Z0-9]+-\d+\b", desc_text):
+        if key == epic_key:
+            continue
+        # Release flow validates Jira work tickets (ENG-*), not advisory labels.
+        if not key.startswith("ENG-"):
+            continue
+        if key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
 def fetch_ticket_summaries(ticket_keys):
     """Fetch Jira summaries for a list of ticket keys.
 
@@ -1001,6 +1097,149 @@ def fetch_ticket_summaries(ticket_keys):
                 result[iss["key"]] = iss.get("summary", "")
 
     return result
+
+
+def fetch_epic_statuses(ticket_keys):
+    """Fetch Jira status for EPIC ticket keys."""
+    if not ticket_keys:
+        return {}
+
+    valid_keys = [k for k in ticket_keys if re.match(r'^[A-Z]+-\d+$', k)]
+    if not valid_keys:
+        return {}
+
+    jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
+    jira_token = _resolve_jira_token()
+    if not jira_token:
+        return {}
+
+    keys_jql = ", ".join(valid_keys)
+    jql = f"key in ({keys_jql})"
+    params = parse.urlencode({
+        "jql": jql,
+        "fields": "key,status",
+        "maxResults": len(valid_keys),
+    })
+    url = f"{jira_url}/rest/api/2/search?{params}"
+
+    req = Request(url)
+    req.add_header("Authorization", f"Bearer {jira_token}")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        with urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return {}
+
+    statuses = {}
+    for issue in data.get("issues", []):
+        key = issue.get("key", "")
+        status_obj = issue.get("fields", {}).get("status", {})
+        statuses[key] = status_obj.get("name", "Unknown") if status_obj else "Unknown"
+    return statuses
+
+
+def _apply_epic_closed_gate(rows):
+    """Keep only rows whose main EPIC is in Closed/Resolved status."""
+    epic_keys = set()
+    for row in rows:
+        m = re.search(r'([A-Z]+-\d+)', row.get("main_ticket", ""))
+        if m:
+            epic_keys.add(m.group(1))
+
+    statuses = fetch_epic_statuses(list(epic_keys))
+    kept = []
+    removed = []
+    skipped_unknown = 0
+
+    for row in rows:
+        m = re.search(r'([A-Z]+-\d+)', row.get("main_ticket", ""))
+        if not m:
+            row["epic_status"] = "Unknown"
+            removed.append(row)
+            continue
+
+        key = m.group(1)
+        status = statuses.get(key, "Unknown")
+        row["epic_status"] = status
+
+        if status.lower() in {"closed", "resolved"}:
+            kept.append(row)
+        else:
+            removed.append(row)
+            if status == "Unknown":
+                skipped_unknown += 1
+
+    return kept, removed, skipped_unknown
+
+
+def _apply_git_tracker_gate(rows, branch):
+    """Keep only rows that have git-tracker comments on EPIC or EPIC children."""
+    kept = []
+    removed = []
+    validated = 0
+    jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
+    jira_token = _resolve_jira_token()
+    branch_short = re.sub(r'^ganges-', '', branch)
+
+    for row in rows:
+        m = re.search(r'([A-Z]+-\d+)', row.get("main_ticket", ""))
+        if not m:
+            row["git_tracker_gate"] = "missing_epic"
+            removed.append(row)
+            continue
+
+        epic_key = m.group(1)
+        validated += 1
+        if not jira_token:
+            row["git_tracker_gate"] = "jira_token_unavailable"
+            removed.append(row)
+            continue
+
+        # 1) Check EPIC directly.
+        epic_candidates = _search_git_tracker_comments(
+            [epic_key], branch_short, branch, jira_url, jira_token)
+        if epic_candidates:
+            row["git_tracker_gate"] = "passed"
+            row["git_tracker_source"] = "epic"
+            kept.append(row)
+            continue
+
+        # 2) Fallback: check all EPIC child tickets.
+        desc_keys = []
+        child_keys = _fetch_epic_children([epic_key], jira_url, jira_token)
+        if child_keys:
+            child_candidates = _search_git_tracker_comments(
+                child_keys, branch_short, branch, jira_url, jira_token)
+            if child_candidates:
+                row["git_tracker_gate"] = "passed"
+                row["git_tracker_source"] = "epic_child"
+                kept.append(row)
+                continue
+        else:
+            # 3) Secondary fallback: parse ticket list from EPIC description.
+            desc_keys = _fetch_epic_description_ticket_keys(
+                epic_key, jira_url, jira_token)
+            if desc_keys:
+                desc_candidates = _search_git_tracker_comments(
+                    desc_keys, branch_short, branch, jira_url, jira_token)
+                if desc_candidates:
+                    row["git_tracker_gate"] = "passed"
+                    row["git_tracker_source"] = "epic_description"
+                    kept.append(row)
+                    continue
+
+        row["git_tracker_source"] = "none"
+        if child_keys:
+            row["git_tracker_gate"] = f"missing_git_tracker (checked EPIC + {len(child_keys)} child ticket(s))"
+        elif desc_keys:
+            row["git_tracker_gate"] = f"missing_git_tracker (checked EPIC + {len(desc_keys)} description ticket(s))"
+        else:
+            row["git_tracker_gate"] = "missing_git_tracker (checked EPIC only; no child/description tickets found)"
+        removed.append(row)
+
+    return kept, removed, validated
 
 
 def _extract_version_from_jira_summary(summary):
@@ -1879,8 +2118,146 @@ def _fill_template(template, row, prev_version, ticket_summaries=None):
     return text
 
 
+def _extract_jira_keys(text):
+    """Extract Jira ticket keys from text."""
+    return set(re.findall(r"\b[A-Z][A-Z0-9]+-\d+\b", text or ""))
+
+
+def _validate_changelog_required_fields(row, content, check_na=True):
+    """Validate mandatory changelog variables/fields are populated."""
+    errors = []
+
+    version = (row.get("goldimage_version") or "").strip()
+    if not version:
+        errors.append("goldimage_version is empty")
+
+    main_ticket = (row.get("main_ticket") or "").strip()
+    if not main_ticket or not re.search(r"\b[A-Z]+-\d+\b", main_ticket):
+        errors.append("main_ticket (EPIC) is missing or invalid")
+
+    release_pr_link = (row.get("release_pr_link") or "").strip()
+    if not release_pr_link:
+        errors.append("release_pr_link is empty")
+
+    gerrit_cr_url = (row.get("gerrit_cr_url") or "").strip()
+    if not gerrit_cr_url:
+        errors.append("gerrit_cr_url is empty")
+
+    associated_prs = row.get("associated_prs", []) or []
+    if not associated_prs:
+        errors.append("associated_prs is empty")
+
+    tickets_resolved = row.get("tickets_resolved", []) or []
+    if not tickets_resolved:
+        errors.append("tickets_resolved is empty")
+
+    unresolved_placeholders = [
+        "{Current_Gold_Image_Version}",
+        "{Previous_Gold_Image_Version}",
+        "{MAIN_JIRA_EPIC}",
+        "{RELEASE_PR_LINK}",
+        "{GERRIT_CR_LINK}",
+        "{% for PR in associated_prs %}",
+        "{% endfor %}",
+        "{% for jira_id in JIRA_TICKETS_FOR_PR %}",
+        "{% else %}",
+    ]
+    for token in unresolved_placeholders:
+        if token in content:
+            errors.append(f"unresolved template token: {token}")
+
+    if check_na:
+        # Allow N/A only in the "no RPM changes" scenario.
+        allowed_na = bool(
+            re.search(r"Old RPMs\s+\|\s+New RPMs", content)
+            and "(no RPM changes)" in content
+        )
+        if re.search(r"\bN/A\b", content) and not allowed_na:
+            errors.append("changelog has N/A placeholder value(s)")
+
+    return errors
+
+
+def _get_expected_epic_tickets(epic_key):
+    """Fetch non-release Jira child tickets linked to an EPIC."""
+    jira_token = _resolve_jira_token()
+    if not jira_token:
+        return None, "JIRA token is unavailable"
+
+    jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
+    child_keys = _fetch_epic_children([epic_key], jira_url, jira_token)
+    source_keys = list(child_keys)
+    if not source_keys:
+        # Fallback: use Jira ticket list embedded in EPIC description.
+        source_keys = _fetch_epic_description_ticket_keys(
+            epic_key, jira_url, jira_token)
+    if not source_keys:
+        return None, "No EPIC child/description ticket list found for strict changelog validation"
+
+    summaries = fetch_ticket_summaries(source_keys)
+    expected = set()
+    for key in source_keys:
+        if key == epic_key:
+            continue
+        # Keep only resolvable Jira issues to avoid false positives from
+        # free-text tokens (e.g. RHSA-* mentioned in summaries/descriptions).
+        if key not in summaries:
+            continue
+        summary = summaries.get(key, "")
+        if re.search(r"\bRelease\b", summary, re.IGNORECASE):
+            continue
+        expected.add(key)
+    return expected, None
+
+
+def _validate_changelog_against_epic(row, changelog_path):
+    """Validate changelog tickets against Jira EPIC child tickets."""
+    main_ticket = row.get("main_ticket", "")
+    match = re.search(r"([A-Z]+-\d+)", main_ticket)
+    if not match:
+        return {"status": "skipped", "reason": "main EPIC ticket not found"}
+
+    epic_key = match.group(1)
+    expected, err = _get_expected_epic_tickets(epic_key)
+    if err:
+        return {"status": "skipped", "reason": err, "epic": epic_key}
+
+    try:
+        with open(changelog_path) as f:
+            content = f.read()
+    except OSError as e:
+        return {"status": "failed", "epic": epic_key, "error": str(e)}
+
+    actual = _extract_jira_keys(content)
+    # EPIC itself must never be part of changelog ticket validation.
+    actual.discard(epic_key)
+    # Ignore non-ENG identifiers like RHSA advisories in changelog text.
+    actual = {k for k in actual if k.startswith("ENG-")}
+
+    # Compare only against EPIC-listed tickets.
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+
+    if missing or extra:
+        return {
+            "status": "failed",
+            "epic": epic_key,
+            "missing": missing,
+            "extra": extra,
+            "expected_count": len(expected),
+            "actual_count": len(actual),
+        }
+
+    return {
+        "status": "passed",
+        "epic": epic_key,
+        "expected_count": len(expected),
+        "actual_count": len(actual),
+    }
+
+
 def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
-                       branch="master"):
+                       branch="master", validation_stats=None):
     """Generate changelog.txt for each release version.
 
     For each row:
@@ -1946,6 +2323,11 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
                 cr_data[ver] = result
 
     generated = []
+    vstats = validation_stats if isinstance(validation_stats, dict) else {}
+    vstats.setdefault("field_passed", 0)
+    vstats.setdefault("field_skipped", 0)
+    vstats.setdefault("epic_passed", 0)
+    vstats.setdefault("epic_skipped", 0)
 
     ci_key_map = {"AOS": "ci_cvm", "PC": "ci_pcvm"}
 
@@ -1979,6 +2361,14 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
         content = _fill_template(template, row, prev_version,
                                  ticket_summaries)
 
+        field_errors = _validate_changelog_required_fields(
+            row, content, check_na=False)
+        if field_errors:
+            raise RuntimeError(
+                f"[{rtype}] changelog field validation failed for {version}: "
+                + "; ".join(field_errors)
+            )
+
         os.makedirs(dest_dir, exist_ok=True)
         with open(changelog_path, "w") as f:
             f.write(content)
@@ -2007,6 +2397,43 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
         else:
             Log.info(f"[{rtype}] changelog.txt: {version} "
                  f"(rpm files missing, skipping diff)")
+
+        # Re-validate after RPM section is finalized to allow the
+        # explicit "(no RPM changes)" case.
+        try:
+            with open(changelog_path) as f:
+                finalized_content = f.read()
+        except OSError as e:
+            raise RuntimeError(
+                f"[{rtype}] changelog post-write validation failed for {version}: {e}"
+            )
+        final_field_errors = _validate_changelog_required_fields(
+            row, finalized_content)
+        if final_field_errors:
+            raise RuntimeError(
+                f"[VALIDATION][FAILED][{rtype}] changelog field validation failed for {version}: "
+                + "; ".join(final_field_errors)
+            )
+        vstats["field_passed"] += 1
+        Log.info(f"[VALIDATION][PASSED][{rtype}] field validation passed for {version}")
+
+        validation = _validate_changelog_against_epic(row, changelog_path)
+        if validation["status"] == "passed":
+            vstats["epic_passed"] += 1
+            Log.info(f"[{rtype}] changelog validation passed for {version} "
+                     f"(EPIC {validation['epic']}: {validation['actual_count']} ticket(s))")
+        elif validation["status"] == "skipped":
+            vstats["epic_skipped"] += 1
+            Log.info(f"[{rtype}] changelog validation skipped for {version}: "
+                     f"{validation.get('reason', 'unknown reason')}")
+        else:
+            missing = ", ".join(validation.get("missing", [])) or "-"
+            extra = ", ".join(validation.get("extra", [])) or "-"
+            raise RuntimeError(
+                f"[VALIDATION][FAILED][{rtype}] changelog validation failed for {version} "
+                f"(EPIC {validation.get('epic', 'N/A')}): "
+                f"missing in changelog=[{missing}], unexpected in changelog=[{extra}]"
+            )
 
         generated.append({"rtype": rtype, "version": version,
                           "path": changelog_path})
@@ -2705,6 +3132,77 @@ Examples:
         server_key, github_commits, gerrit_commits, github_epics,
         args.branch, args.filter,
     )
+
+    # Early pipeline gate: only process releases whose EPIC is Closed.
+    Log.info("Applying EPIC status gate (Closed/Resolved only)...")
+    original_count = len(rows)
+    rows, removed_rows, unknown_count = _apply_epic_closed_gate(rows)
+    _pipeline_stats["epic_gate_kept"] = len(rows)
+    _pipeline_stats["epic_gate_removed"] = len(removed_rows)
+    _pipeline_stats["epic_gate_unknown"] = unknown_count
+    if removed_rows:
+        for r in removed_rows:
+            Log.info(f"[EPIC-GATE][REMOVED] {r.get('goldimage_version', 'unknown')} "
+                     f"({r.get('type', 'AOS')}) EPIC status={r.get('epic_status', 'Unknown')}")
+            _record_validation_bypass(
+                r.get("goldimage_version", "unknown"),
+                r.get("type", "AOS"),
+                "EPIC Status Gate",
+                f"EPIC status is {r.get('epic_status', 'Unknown')} (allowed: Closed/Resolved)",
+            )
+    if effective_count <= 1 and removed_rows:
+        raise RuntimeError(
+            "Single-release run stopped by EPIC status gate: the requested release "
+            "is not eligible (EPIC must be Closed/Resolved)."
+        )
+    Log.info(f"EPIC status gate result: {original_count} -> {len(rows)} rows")
+    if not rows:
+        raise RuntimeError(
+            "EPIC status gate removed all releases: all candidate release EPICs are neither Closed nor Resolved "
+            "(e.g., Open/In Progress/Unknown). Pipeline terminated before downstream stages."
+        )
+
+    # Second early gate: release must have git-tracker on EPIC or EPIC children.
+    Log.info("Applying git-tracker gate (EPIC or EPIC child ticket must contain git tracker comment)...")
+    gate_before = len(rows)
+    rows, gt_removed_rows, gt_validated = _apply_git_tracker_gate(rows, args.branch)
+    _pipeline_stats["git_tracker_gate_kept"] = len(rows)
+    _pipeline_stats["git_tracker_gate_removed"] = len(gt_removed_rows)
+    _pipeline_stats["git_tracker_gate_validated"] = gt_validated
+    if gt_removed_rows:
+        for r in gt_removed_rows:
+            Log.info(f"[GIT-TRACKER-GATE][REMOVED] {r.get('goldimage_version', 'unknown')} "
+                     f"({r.get('type', 'AOS')}) reason={r.get('git_tracker_gate', 'unknown')}")
+            raw_reason = r.get("git_tracker_gate", "unknown")
+            if raw_reason == "missing_epic":
+                human_reason = "Main EPIC ticket missing/invalid in release metadata"
+            elif raw_reason.startswith("missing_git_tracker"):
+                human_reason = "No git-tracker comment found on EPIC or EPIC-linked child ticket"
+                details = raw_reason.replace("missing_git_tracker", "").strip()
+                if details:
+                    human_reason = f"{human_reason} {details}"
+            elif raw_reason == "jira_token_unavailable":
+                human_reason = "Jira token unavailable; cannot validate git-tracker comments"
+            else:
+                human_reason = raw_reason
+            _record_validation_bypass(
+                r.get("goldimage_version", "unknown"),
+                r.get("type", "AOS"),
+                "Git Tracker Gate",
+                human_reason,
+            )
+    if effective_count <= 1 and gt_removed_rows:
+        raise RuntimeError(
+            "Single-release run stopped by Git Tracker gate: no git-tracker comment "
+            "was found on EPIC or EPIC-linked child tickets for the requested release."
+        )
+    Log.info(f"Git tracker gate result: {gate_before} -> {len(rows)} rows")
+    if not rows:
+        raise RuntimeError(
+            "Git tracker gate removed all releases: no git-tracker comment found on EPIC "
+            "or EPIC-linked child Jira tickets. Pipeline terminated before downstream stages."
+        )
+
     # Keep full fetched history for previous-release mapping and RPM diffs.
     # Output rows may later be filtered/sliced (e.g. since-Confluence mode),
     # but previous-release context must still come from the unfiltered timeline.
@@ -2919,11 +3417,17 @@ Examples:
     # Generate changelog.txt if requested (after RPMs are on disk)
     if args.generate_changelog:
         Log.info("Generating changelog.txt from template...")
+        changelog_validation_stats = {}
         changelogs = generate_changelog(rows, prev_rows, args.rpm_dir,
-                                        args.filter, args.branch)
+                                        args.filter, args.branch,
+                                        validation_stats=changelog_validation_stats)
         for cl in changelogs:
             Log.info(f"[{cl['rtype']}] changelog → {cl['path']}")
         _pipeline_stats["changelogs"] = len(changelogs)
+        _pipeline_stats["changelog_validation_field_passed"] = changelog_validation_stats.get("field_passed", 0)
+        _pipeline_stats["changelog_validation_field_skipped"] = changelog_validation_stats.get("field_skipped", 0)
+        _pipeline_stats["changelog_validation_epic_passed"] = changelog_validation_stats.get("epic_passed", 0)
+        _pipeline_stats["changelog_validation_epic_skipped"] = changelog_validation_stats.get("epic_skipped", 0)
 
     # Upload changelog + rpm to SFTP server
     if args.upload_sftp:
@@ -3026,4 +3530,23 @@ Examples:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as e:
+        msg = str(e)
+        if "Single-release run stopped by EPIC status gate" in msg:
+            code = "EPIC_GATE_SINGLE_RELEASE_BLOCKED"
+        elif "EPIC status gate removed all releases" in msg:
+            code = "EPIC_GATE_ALL_RELEASES_BLOCKED"
+        elif "Single-release run stopped by Git Tracker gate" in msg:
+            code = "GIT_TRACKER_GATE_SINGLE_RELEASE_BLOCKED"
+        elif "Git tracker gate removed all releases" in msg:
+            code = "GIT_TRACKER_GATE_ALL_RELEASES_BLOCKED"
+        elif "[VALIDATION][FAILED]" in msg:
+            code = "CHANGELOG_VALIDATION_FAILED"
+        else:
+            code = "PIPELINE_RUNTIME_ERROR"
+        _record_pipeline_issue("Validation Gate", msg, error_code=code)
+        Log.error(str(e))
+        _print_pipeline_status(force=True)
+        sys.exit(1)

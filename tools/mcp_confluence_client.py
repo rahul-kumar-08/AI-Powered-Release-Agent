@@ -1190,6 +1190,8 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
             aos_release_value = str(
                 row.get("aos_release", row.get("AOS_release", ""))
             ).strip()
+            jira_branch_equiv_value = _extract_jira_branch_equiv_from_row(row)
+            use_jira_branch_equiv_release = branch in PC_TARBALL_BRANCHES
 
             # Populate PC release value for both explicit PC columns and
             # generic "Release" columns when handling PC rows.
@@ -1197,7 +1199,9 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
                 pc_release_value = str(
                     row.get("pc_release", row.get("PC_release", "")) or ""
                 ).strip()
-                if not pc_release_value:
+                if use_jira_branch_equiv_release and jira_branch_equiv_value:
+                    pc_release_value = jira_branch_equiv_value
+                elif not pc_release_value:
                     pc_release_value = _extract_jira_branch_equiv_from_row(row)
                 if not pc_release_value:
                     pc_release_value = _extract_target_release_from_row(row)
@@ -1209,7 +1213,9 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
                         fix_version_cache,
                         branch_ver=branch_ver,
                     )
-            if not aos_release_value and row_type == "AOS":
+            if row_type == "AOS" and use_jira_branch_equiv_release and jira_branch_equiv_value:
+                aos_release_value = jira_branch_equiv_value
+            elif not aos_release_value and row_type == "AOS":
                 # AOS rows can safely default to their own release version.
                 aos_release_value = str(
                     row.get("goldimage_version", row.get("ver", ""))

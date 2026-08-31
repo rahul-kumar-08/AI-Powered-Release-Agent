@@ -488,7 +488,8 @@ def _run_streaming(cmd):
 
 def _is_retryable_stderr(stderr):
     """Check if the tool's stderr indicates a retryable exception type."""
-    retryable_types = ("RateLimitError", "NetworkError", "HttpError")
+    # Fail fast on MCP connectivity/server errors; only rate limits are retried.
+    retryable_types = ("RateLimitError",)
     for t in retryable_types:
         if t in (stderr or ""):
             return True

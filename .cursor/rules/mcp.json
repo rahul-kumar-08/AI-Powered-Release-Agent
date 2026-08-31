@@ -1,39 +1,43 @@
 {
   "mcpServers": {
-    "github": {
-      "url": "https://api.githubcopilot.com/mcp/",
-      "description": "GitHub MCP Server — release PRs, repos, issues (PAT auth)",
+    "jenkins": {
+      "url": "https://panacea-mcp-aigw.gamma.p10y.ntnxdpro.com/mcp/jenkins",
       "headers": {
-        "Authorization": "Bearer ${GITHUB_TOKEN}",
-        "X-GitHub-MCP-Toolsets": "context,repos,pull_requests,issues"
+        "x-api-key": "476bd81e6e5f7e4b28ab6a4bcbac76e5396c2dd4466e825e75935ead1f55b38d"
       }
     },
-    "gw-sourcegraph": {
-      "url": "https://panacea-dev.eng.nutanix.com/mcp/sourcegraph",
-      "description": "gw -> sourcegraph (no PII filter)",
+    "github": {
+      "url": "https://panacea-mcp-aigw.gamma.p10y.ntnxdpro.com/mcp/github",
       "headers": {
-        "Authorization": "Bearer {SOURCEGRAPH_TOKEN}"
-        
+        "x-api-key": "476bd81e6e5f7e4b28ab6a4bcbac76e5396c2dd4466e825e75935ead1f55b38d",
+        "X-GitHub-Token": "${GITHUB_TOKEN}"
+      }
+    },
+    "sourcegraph": {
+      "url": "https://panacea-mcp-aigw.gamma.p10y.ntnxdpro.com/mcp/sourcegraph",
+      "headers": {
+        "x-api-key": "476bd81e6e5f7e4b28ab6a4bcbac76e5396c2dd4466e825e75935ead1f55b38d",
+        "X-Sourcegraph-Token": "${SOURCEGRAPH_TOKEN}"
       }
     },
     "atlassian": {
-      "url": "https://panacea-dev.eng.nutanix.com/mcp/atlassian",
-      "description": "gw -> atlassian (PII ON, Request+Response, fail-open)",
+      "url": "https://panacea-mcp-aigw.gamma.p10y.ntnxdpro.com/mcp/atlassian",
       "headers": {
+        "x-api-key": "476bd81e6e5f7e4b28ab6a4bcbac76e5396c2dd4466e825e75935ead1f55b38d",
         "X-Atlassian-Jira-Personal-Token": "${JIRA_TOKEN}",
         "X-Atlassian-Jira-Url": "https://jira.nutanix.com",
-        "X-Atlassian-Confluence-Url": "https://confluence.eng.nutanix.com:8443/",
-        "X-Atlassian-Confluence-Personal-Token": "${CONFLUENCE_TOKEN}"
+        "X-Atlassian-Confluence-Personal-Token": "${CONFLUENCE_TOKEN}",
+        "X-Atlassian-Confluence-Url": "https://confluence.eng.nutanix.com:8443/"
       }
     },
     "atlassian-write": {
-      "url": "https://panacea-dev.eng.nutanix.com/mcp/atlassian-write",
-      "description": "gw -> atlassian write endpoint (Confluence writes)",
+      "url": "https://panacea-mcp-aigw.gamma.p10y.ntnxdpro.com/mcp/atlassian-write",
       "headers": {
+        "x-api-key": "476bd81e6e5f7e4b28ab6a4bcbac76e5396c2dd4466e825e75935ead1f55b38d",
         "X-Atlassian-Jira-Personal-Token": "${JIRA_TOKEN}",
         "X-Atlassian-Jira-Url": "https://jira.nutanix.com",
-        "X-Atlassian-Confluence-Url": "https://confluence.eng.nutanix.com:8443/",
-        "X-Atlassian-Confluence-Personal-Token": "${CONFLUENCE_TOKEN}"
+        "X-Atlassian-Confluence-Personal-Token": "${CONFLUENCE_TOKEN}",
+        "X-Atlassian-Confluence-Url": "https://confluence.eng.nutanix.com:8443/"
       }
     }
   }

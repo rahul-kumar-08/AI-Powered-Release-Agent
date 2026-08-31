@@ -24,7 +24,9 @@ import ssl
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
+import httpx
 import pandas as pd
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
@@ -163,7 +165,28 @@ def call_tool(server_key, tool_name, arguments):
         Tool result as a dict with "content" key containing response parts.
     """
     url, headers = load_mcp_config(server_key)
-    return asyncio.run(_async_call_tool(url, headers, tool_name, arguments))
+    try:
+        return asyncio.run(_async_call_tool(url, headers, tool_name, arguments))
+    except httpx.HTTPStatusError as e:
+        status = getattr(e.response, "status_code", "unknown")
+        reason = getattr(e.response, "reason_phrase", "") or "HTTP error"
+        host = urlparse(url).netloc or url
+        raise RuntimeError(
+            f"HttpError: MCP call failed ({server_key}/{tool_name}) via {host}: "
+            f"HTTP {status} {reason}. "
+            "Likely transient gateway/server issue; retry shortly or verify MCP service health."
+        ) from e
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.NetworkError) as e:
+        host = urlparse(url).netloc or url
+        raise RuntimeError(
+            f"NetworkError: MCP call failed ({server_key}/{tool_name}) via {host}: {e}. "
+            "Check network/connectivity to MCP gateway and retry."
+        ) from e
+    except Exception as e:
+        host = urlparse(url).netloc or url
+        raise RuntimeError(
+            f"MCPError: MCP call failed ({server_key}/{tool_name}) via {host}: {e}"
+        ) from e
 
 
 async def _async_call_tool(url, headers, tool_name, arguments):
@@ -388,7 +411,7 @@ def _validate_jenkins(headers=None):
 
 
 _SERVER_VALIDATORS = {
-    "gw-sourcegraph": ("Sourcegraph", _validate_sourcegraph, True),
+    "sourcegraph":    ("Sourcegraph", _validate_sourcegraph, True),
     "github":         ("GitHub",      _validate_github,      False),
     "atlassian":      ("Jira",        _validate_jira,        True),
 }
@@ -423,11 +446,23 @@ def validate_mcp_tokens(required_servers=None, github_org="nutanix-core"):
     Returns:
         dict mapping server key → (ok: bool, message: str).
     """
+    # Backward compatibility: historic key `gw-sourcegraph` now maps to `sourcegraph`.
+    normalized_required = None
+    if required_servers:
+        normalized_required = []
+        for key in required_servers:
+            normalized_required.append("sourcegraph" if key == "gw-sourcegraph" else key)
+        # Keep order while removing duplicates
+        seen = set()
+        normalized_required = [k for k in normalized_required if not (k in seen or seen.add(k))]
+
     results = {}
     critical_failures = []
     validation_rows = []
 
     for server_key, (label, validator, _) in _SERVER_VALIDATORS.items():
+        if normalized_required and server_key not in normalized_required:
+            continue
         try:
             _, headers = load_mcp_config(server_key)
         except RuntimeError:
@@ -451,7 +486,7 @@ def validate_mcp_tokens(required_servers=None, github_org="nutanix-core"):
             critical_failures.append((label, msg))
 
     for server_key, (label, validator, _) in _STANDALONE_VALIDATORS.items():
-        if required_servers and server_key not in required_servers:
+        if normalized_required and server_key not in normalized_required:
             continue
         ok, msg = validator()
         results[server_key] = (ok, msg)

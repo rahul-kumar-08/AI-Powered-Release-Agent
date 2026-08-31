@@ -1008,6 +1008,14 @@ def get_confluence_page_releases(server_key, parent_id, branch, release_type,
             server_key, parent_id, branch, release_type,
             rows=None, space_key=space_key)
     except Exception as e:
+        err_text = str(e)
+        if ("HttpError:" in err_text
+                or "NetworkError:" in err_text
+                or "MCPError:" in err_text):
+            raise RuntimeError(
+                "Critical MCP error during Confluence page lookup: "
+                f"{err_text}"
+            ) from e
         Log.error(f"Confluence lookup failed (find_target_page): {e}")
         return None
 
@@ -1017,6 +1025,14 @@ def get_confluence_page_releases(server_key, parent_id, branch, release_type,
     try:
         page_content = get_page_content(server_key, page_id)
     except Exception as e:
+        err_text = str(e)
+        if ("HttpError:" in err_text
+                or "NetworkError:" in err_text
+                or "MCPError:" in err_text):
+            raise RuntimeError(
+                "Critical MCP error during Confluence page content fetch: "
+                f"{err_text}"
+            ) from e
         Log.error(f"Confluence lookup failed (get_page_content): {e}")
         return None
 

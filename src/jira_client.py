@@ -337,13 +337,15 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
             ver_match = re.search(
                 r'JIRA Version \(branch equiv\)\s*:\s*(.+)', body)
             branch_match = re.search(r'Branch\s*:\s*(.+)', body)
+            # Accept bare URLs or Jira wiki-link form: [https://...]
             cr_match = re.search(
-                r'Code Review URL\s*:\s*(https?://\S+)', body)
+                r'Code Review URL\s*:\s*\[?(https?://[^\s\]]+)\]?', body)
             if not cr_match:
                 continue
 
             jira_ver = ver_match.group(1).strip() if ver_match else ""
             gerrit_branch = branch_match.group(1).strip() if branch_match else ""
+            cr_url = cr_match.group(1).rstrip(']')
 
             if (branch_short == jira_ver
                     or branch_short == gerrit_branch
@@ -352,7 +354,7 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
                     or gerrit_branch.startswith(branch)):
                 comment_created = c.get("created", "")
                 candidates.append({
-                    "cr_url": cr_match.group(1),
+                    "cr_url": cr_url,
                     "merged_date": comment_created or None,
                 })
 

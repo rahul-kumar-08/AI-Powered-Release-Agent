@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
+from html import escape
 
 import streamlit as st
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -148,14 +149,139 @@ def extract_chat_result(output: str, return_code: int) -> str:
             continue
         clean_lines.append(ln)
 
-    table_lines = [ln for ln in clean_lines if "|" in ln and len(ln.split("|")) >= 3]
-    if table_lines:
-        return "\n".join(table_lines[-40:])
+    table_block = _extract_markdown_table_block(clean_lines)
+    if table_block:
+        return table_block
 
     if return_code != 0:
         return "\n".join(clean_lines[-20:]) if clean_lines else output[-3000:]
 
     return "\n".join(clean_lines[-16:]) if clean_lines else output[-2000:]
+
+
+def _extract_markdown_table_block(lines: List[str]) -> str:
+    """Extract a single clean markdown table block from command output."""
+    if not lines:
+        return ""
+
+    blocks: List[List[str]] = []
+    current: List[str] = []
+
+    def _is_table_like(line: str) -> bool:
+        if "|" not in line:
+            return False
+        parts = [p.strip() for p in line.split("|")]
+        non_empty = [p for p in parts if p]
+        return len(non_empty) >= 2
+
+    for line in lines:
+        if _is_table_like(line):
+            current.append(line)
+        else:
+            if len(current) >= 2:
+                blocks.append(current)
+            current = []
+    if len(current) >= 2:
+        blocks.append(current)
+
+    if not blocks:
+        return ""
+
+    # Prefer the release results table when present; otherwise use the largest table.
+    preferred_headers = (
+        "GoldImage Version",
+        "Main Ticket",
+        "Change Log",
+        "RPM List",
+        "Merge Date",
+    )
+    scored_blocks = []
+    for blk in blocks:
+        header = blk[0]
+        score = sum(1 for h in preferred_headers if h in header)
+        scored_blocks.append((score, len(blk), blk))
+
+    scored_blocks.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    best_block = scored_blocks[0][2]
+    return "\n".join(best_block)
+
+
+def _parse_markdown_table(text: str):
+    """Parse a markdown table into headers and rows."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return None, None
+    if "|" not in lines[0] or "|" not in lines[1]:
+        return None, None
+
+    def _split_row(line: str) -> List[str]:
+        if line.startswith("|"):
+            line = line[1:]
+        if line.endswith("|"):
+            line = line[:-1]
+        return [c.strip() for c in line.split("|")]
+
+    headers = _split_row(lines[0])
+    if not headers or len(headers) < 2:
+        return None, None
+
+    rows = []
+    for ln in lines[2:]:
+        if "|" not in ln:
+            continue
+        # Skip markdown separator rows.
+        if re.fullmatch(r"[\|\-\:\s]+", ln):
+            continue
+        cols = _split_row(ln)
+        if len(cols) == len(headers):
+            rows.append(cols)
+
+    return headers, rows
+
+
+def _extract_table_and_tail(text: str):
+    """Split assistant content into [table, non-table tail]."""
+    lines = (text or "").splitlines()
+    table_start = None
+    table_end = None
+
+    for i in range(len(lines) - 1):
+        if "|" in lines[i] and "|" in lines[i + 1]:
+            table_start = i
+            break
+    if table_start is None:
+        return "", text
+
+    j = table_start
+    while j < len(lines) and "|" in lines[j]:
+        table_end = j
+        j += 1
+    if table_end is None:
+        return "", text
+
+    table_text = "\n".join(lines[table_start:table_end + 1]).strip()
+    tail = "\n".join(lines[table_end + 1:]).strip()
+    return table_text, tail
+
+
+def _render_release_grid(table_text: str) -> bool:
+    """Render release results as a wrapped single-row-per-release grid."""
+    headers, rows = _parse_markdown_table(table_text)
+    if not headers or not rows:
+        return False
+
+    html_lines = ['<div class="chat-release-grid-wrap"><table class="chat-release-grid"><thead><tr>']
+    for h in headers:
+        html_lines.append(f"<th>{escape(h)}</th>")
+    html_lines.append("</tr></thead><tbody>")
+    for row in rows:
+        html_lines.append("<tr>")
+        for cell in row:
+            html_lines.append(f"<td>{escape(cell)}</td>")
+        html_lines.append("</tr>")
+    html_lines.append("</tbody></table></div>")
+    st.markdown("".join(html_lines), unsafe_allow_html=True)
+    return True
 
 
 def extract_token_usage(raw_output: str, prompt: str, final_text: str) -> str:
@@ -260,7 +386,16 @@ def render_chat_panel() -> None:
                 role = item["role"]
                 content = item["content"]
                 with st.chat_message(role):
-                    st.markdown(content if content else "(empty)")
+                    if role == "assistant" and content:
+                        table_text, tail_text = _extract_table_and_tail(content)
+                        rendered = _render_release_grid(table_text) if table_text else False
+                        if rendered:
+                            if tail_text:
+                                st.markdown(tail_text)
+                        else:
+                            st.markdown(content)
+                    else:
+                        st.markdown(content if content else "(empty)")
                     if role == "assistant" and item.get("raw"):
                         show_key = f"chat-msg-show-raw-{idx}"
                         local_show = st.checkbox(
@@ -790,6 +925,37 @@ def inject_ui_style(density: str = "Comfortable") -> None:
         .status-failed {{
           background: rgba(231, 76, 60, 0.2);
           border-color: rgba(231, 76, 60, 0.5);
+        }}
+
+        .chat-release-grid-wrap {{
+          width: 100%;
+          overflow-x: auto;
+          border: 1px solid var(--card-border);
+          border-radius: 10px;
+          margin-top: 0.2rem;
+        }}
+        .chat-release-grid {{
+          width: 100%;
+          border-collapse: collapse;
+          table-layout: fixed;
+        }}
+        .chat-release-grid th, .chat-release-grid td {{
+          border-bottom: 1px solid var(--card-border);
+          padding: 0.38rem 0.45rem;
+          text-align: left;
+          vertical-align: top;
+          white-space: normal;
+          word-break: break-word;
+          overflow-wrap: anywhere;
+          font-size: {body_size};
+          line-height: 1.35;
+        }}
+        .chat-release-grid th {{
+          font-weight: 700;
+          background: rgba(79, 141, 247, 0.08);
+        }}
+        .chat-release-grid tr:last-child td {{
+          border-bottom: none;
         }}
 
         pre, code, .stCodeBlock, textarea[aria-label="Terminal Output"], textarea[aria-label="Manual Run Live Output"] {{

@@ -1,0 +1,207 @@
+{
+  "main-ganges-pc.7.6-rhel9.8-12.0.0": {
+    "goldimage_version": "main-ganges-pc.7.6-rhel9.8-12.0.0",
+    "type": "PC",
+    "main_ticket": "ENG-980375",
+    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-12.0.0/changelog.txt",
+    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/PC_GoldImages/pc/pc.7.6/main-ganges-pc.7.6-rhel9.8-12.0.0/rpm.txt",
+    "merge_date": "23-Sep-2026",
+    "github_date": "08-Sep-2026",
+    "sg_date": "23-Sep-2026",
+    "gerrit_date": "2026-09-23T06:13:17.718+0000",
+    "notes": "ganges-7.6",
+    "commit": "0a636abeebced259427e2377ab1d8cb8920278bf",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2562",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/595203",
+    "tickets_resolved": [
+      "ENG-976925",
+      "ENG-977049",
+      "ENG-979110",
+      "ENG-978562"
+    ],
+    "associated_prs": [
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2555",
+      "https://github.com/nutanix-core/aos-goldimage-kernel/pull/567"
+    ],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-14.0.0 / PC : Release gold image main-ganges-pc.7.6-rhel9.8-12.0.0 (#2563)\n\nTickets Resolved : ENG-976925\nEpic : ENG-980374, ENG-980375\nTarget Release : 7.6.1",
+    "epic_status": "Resolved",
+    "git_tracker_gate": "passed",
+    "git_tracker_source": "epic",
+    "jira_branch_equiv": "pc.7.6.1",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/30055",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-09-08T09:01:41Z",
+      "updated_at": "2026-09-08T09:01:41Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/30056",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-09-08T09:02:47Z",
+      "updated_at": "2026-09-08T09:02:47Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-976925",
+        "summary": "EL9 - Update 5.14 kernel to rocky-5.14.0-687.39.1.el9_8 kernel"
+      },
+      {
+        "key": "ENG-977049",
+        "summary": "Release gold image main-master-rhel9.8-14.0.0"
+      },
+      {
+        "key": "ENG-979110",
+        "summary": "PC : Release gold image main-master-rhel9.8-12.0.0"
+      },
+      {
+        "key": "ENG-978562",
+        "summary": "Port mitigations=off,eibrs option for 5.14.0-687.39.1.el9_8 "
+      }
+    ],
+    "main_ticket_summary": "PC : Release gold image main-ganges-pc.7.6-rhel9.8-12.0.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-pc.7.6-rhel9.8-11.0.0",
+      "type": "PC",
+      "main_ticket": "ENG-970952",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2430",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2423"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29932",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-08-27T09:30:59Z",
+        "updated_at": "2026-08-27T09:30:59Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29931",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-08-27T09:31:22Z",
+        "updated_at": "2026-08-27T09:31:22Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  },
+  "main-ganges-7.6-rhel9.8-14.0.0": {
+    "goldimage_version": "main-ganges-7.6-rhel9.8-14.0.0",
+    "type": "AOS",
+    "main_ticket": "ENG-980374",
+    "changelog_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-14.0.0/changelog.txt",
+    "rpm_url": "https://endor-cache-2.corp.nutanix.com/GoldImages/Centos_SVM/STS/7.6/main-ganges-7.6-rhel9.8-14.0.0/rpm.txt",
+    "merge_date": "23-Sep-2026",
+    "github_date": "08-Sep-2026",
+    "sg_date": "23-Sep-2026",
+    "gerrit_date": "2026-09-23T06:12:07.192+0000",
+    "notes": "ganges-7.6",
+    "commit": "0a636abeebced259427e2377ab1d8cb8920278bf",
+    "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2562",
+    "gerrit_cr_url": "https://nugerrit.ntnxdpro.com/c/main/+/595203",
+    "tickets_resolved": [
+      "ENG-976925",
+      "ENG-977049",
+      "ENG-979110",
+      "ENG-978562"
+    ],
+    "associated_prs": [
+      "https://github.com/nutanix-core/aos-goldimage-os/pull/2555",
+      "https://github.com/nutanix-core/aos-goldimage-kernel/pull/567"
+    ],
+    "commit_message": "Release gold image main-ganges-7.6-rhel9.8-14.0.0 / PC : Release gold image main-ganges-pc.7.6-rhel9.8-12.0.0 (#2563)\n\nTickets Resolved : ENG-976925\nEpic : ENG-980374, ENG-980375\nTarget Release : 7.6.1",
+    "epic_status": "Resolved",
+    "git_tracker_gate": "passed",
+    "git_tracker_source": "epic",
+    "jira_branch_equiv": "pc.7.6.1",
+    "branch": "ganges-7.6",
+    "ci_cvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/30055",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-09-08T09:01:41Z",
+      "updated_at": "2026-09-08T09:01:41Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "ci_pcvm": {
+      "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/30056",
+      "state": "success",
+      "description": "Your tests passed on CircleCI Enterprise!",
+      "created_at": "2026-09-08T09:02:47Z",
+      "updated_at": "2026-09-08T09:02:47Z",
+      "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+      "creator": "sahayaleenus"
+    },
+    "tickets_resolved_details": [
+      {
+        "key": "ENG-976925",
+        "summary": "EL9 - Update 5.14 kernel to rocky-5.14.0-687.39.1.el9_8 kernel"
+      },
+      {
+        "key": "ENG-977049",
+        "summary": "Release gold image main-master-rhel9.8-14.0.0"
+      },
+      {
+        "key": "ENG-979110",
+        "summary": "PC : Release gold image main-master-rhel9.8-12.0.0"
+      },
+      {
+        "key": "ENG-978562",
+        "summary": "Port mitigations=off,eibrs option for 5.14.0-687.39.1.el9_8 "
+      }
+    ],
+    "main_ticket_summary": "Release gold image main-ganges-7.6-rhel9.8-14.0.0",
+    "previous_release": {
+      "goldimage_version": "main-ganges-7.6-rhel9.8-13.0.0",
+      "type": "AOS",
+      "main_ticket": "ENG-970951",
+      "release_pr_link": "https://github.com/nutanix-core/aos-goldimage-os/pull/2546",
+      "associated_prs": [
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2454",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2501",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2504",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2505",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2512",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2513",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2524",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2534",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2533",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2535",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2539",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2541",
+        "https://github.com/nutanix-core/aos-goldimage-os/pull/2543",
+        "https://github.com/nutanix-core/aos-goldimage-kernel/pull/561",
+        "https://github.com/nutanix-core/aos-goldimage-kernel/pull/551",
+        "https://github.com/nutanix-core/aos-goldimage-kernel/pull/566"
+      ],
+      "ci_cvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29932",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-08-27T09:30:59Z",
+        "updated_at": "2026-08-27T09:30:59Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_cvm_x86",
+        "creator": "sahayaleenus"
+      },
+      "ci_pcvm": {
+        "url": "https://circleci4.corp.p10y.ntnxdpro.com/gh/nutanix-core/aos-goldimage-os/29931",
+        "state": "success",
+        "description": "Your tests passed on CircleCI Enterprise!",
+        "created_at": "2026-08-27T09:31:22Z",
+        "updated_at": "2026-08-27T09:31:22Z",
+        "context": "ci/circleci_enterprise: postmerge_gi_pcvm_x86",
+        "creator": "sahayaleenus"
+      }
+    }
+  }
+}

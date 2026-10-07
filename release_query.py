@@ -943,13 +943,15 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
             ver_match = re.search(
                 r'JIRA Version \(branch equiv\)\s*:\s*(.+)', body)
             branch_match = re.search(r'Branch\s*:\s*(.+)', body)
+            # Accept bare URLs or Jira wiki-link form: [https://...]
             cr_match = re.search(
-                r'Code Review URL\s*:\s*(https?://\S+)', body)
+                r'Code Review URL\s*:\s*\[?(https?://[^\s\]]+)\]?', body)
             if not cr_match:
                 continue
 
             jira_ver = ver_match.group(1).strip() if ver_match else ""
             gerrit_branch = branch_match.group(1).strip() if branch_match else ""
+            cr_url = cr_match.group(1).rstrip(']')
 
             is_master = (branch == "master")
             if (branch_short == jira_ver
@@ -960,7 +962,7 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
                     or gerrit_branch.startswith(branch)):
                 comment_created = c.get("created", "")
                 candidates.append({
-                    "cr_url": cr_match.group(1),
+                    "cr_url": cr_url,
                     "merged_date": comment_created or None,
                     "jira_branch_equiv": jira_ver,
                 })
@@ -2123,7 +2125,7 @@ def _extract_jira_keys(text):
     return set(re.findall(r"\b[A-Z][A-Z0-9]+-\d+\b", text or ""))
 
 
-def _validate_changelog_required_fields(row, content, check_na=True):
+def _validate_changelog_required_fields(row, content, check_na=True, allow_old_gi_na=False):
     """Validate mandatory changelog variables/fields are populated."""
     errors = []
 
@@ -2172,7 +2174,16 @@ def _validate_changelog_required_fields(row, content, check_na=True):
             re.search(r"Old RPMs\s+\|\s+New RPMs", content)
             and "(no RPM changes)" in content
         )
-        if re.search(r"\bN/A\b", content) and not allowed_na:
+        content_for_na_check = content
+        if allow_old_gi_na:
+            # In some runs, previous release context may be legitimately unavailable.
+            # Allow exactly "Old GI: N/A" while keeping all other N/A checks strict.
+            content_for_na_check = re.sub(
+                r"(?m)^Old GI:\s*N/A\s*$",
+                "Old GI: __NA_ALLOWED__",
+                content_for_na_check,
+            )
+        if re.search(r"\bN/A\b", content_for_na_check) and not allowed_na:
             errors.append("changelog has N/A placeholder value(s)")
 
     return errors
@@ -2408,7 +2419,10 @@ def generate_changelog(rows, prev_rows, output_dir, filter_type="all",
                 f"[{rtype}] changelog post-write validation failed for {version}: {e}"
             )
         final_field_errors = _validate_changelog_required_fields(
-            row, finalized_content)
+            row,
+            finalized_content,
+            allow_old_gi_na=(prev_row is None),
+        )
         if final_field_errors:
             raise RuntimeError(
                 f"[VALIDATION][FAILED][{rtype}] changelog field validation failed for {version}: "
@@ -3166,10 +3180,10 @@ Examples:
                 "EPIC Status Gate",
                 f"EPIC status is {r.get('epic_status', 'Unknown')} (allowed: Closed/Resolved)",
             )
-    if effective_count <= 1 and removed_rows:
-        raise RuntimeError(
-            "Single-release run stopped by EPIC status gate: the requested release "
-            "is not eligible (EPIC must be Closed/Resolved)."
+    if effective_count <= 1 and removed_rows and rows:
+        Log.info(
+            "Single-release mode: latest candidate failed EPIC status gate; "
+            "continuing with next eligible release."
         )
     Log.info(f"EPIC status gate result: {original_count} -> {len(rows)} rows")
     if not rows:
@@ -3207,10 +3221,10 @@ Examples:
                 "Git Tracker Gate",
                 human_reason,
             )
-    if effective_count <= 1 and gt_removed_rows:
-        raise RuntimeError(
-            "Single-release run stopped by Git Tracker gate: no git-tracker comment "
-            "was found on EPIC or EPIC-linked child tickets for the requested release."
+    if effective_count <= 1 and gt_removed_rows and rows:
+        Log.info(
+            "Single-release mode: latest candidate failed git-tracker gate; "
+            "continuing with next eligible release."
         )
     Log.info(f"Git tracker gate result: {gate_before} -> {len(rows)} rows")
     if not rows:

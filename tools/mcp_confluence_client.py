@@ -40,10 +40,12 @@ from datetime import datetime
 try:
     from tools.mcp_client import call_tool as _mcp_call_tool, _get_env
     from src.logger import Log
+    from src.config import confluence_page_version, parse_ganges_branch, preserves_confluence_layout
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from mcp_client import call_tool as _mcp_call_tool, _get_env
     from src.logger import Log
+    from src.config import confluence_page_version, parse_ganges_branch, preserves_confluence_layout
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -208,9 +210,23 @@ def _collect_all_pages(server_key, parent_id, depth=0, max_depth=3):
 
 
 def _extract_branch_ver(branch):
-    """'ganges-7.6' → '7.6',  'master' → None."""
-    m = re.match(r"ganges-([\d.]+)", branch)
-    return m.group(1) if m else None
+    """'ganges-7.6' → '7.6', 'ganges-7.6.0.x' → '7.6.0.X', 'master' → None."""
+    page = confluence_page_version(branch)
+    return page or None
+
+
+def _title_has_branch_ver(title, branch_ver):
+    """Match a branch version as its own token.
+
+    ``7.6`` matches ``Modern STS - 7.6`` and does not match
+    ``Modern STS - 7.6.0.X``.
+    """
+    if not title or not branch_ver:
+        return False
+    return re.search(
+        rf"(?<!\d){re.escape(branch_ver.lower())}(?![\d.x])",
+        title.lower(),
+    ) is not None
 
 
 def _extract_rhel_major(version_str):
@@ -281,16 +297,14 @@ def find_target_page(server_key, parent_id, branch, release_type,
     # accidentally routing to AOS-style pages like "Modern STS - x.y".
     if branch_ver:
         for page in all_pages:
-            title_lower = page.get("title", "").lower()
-            if branch_ver not in title_lower:
+            title = page.get("title", "")
+            if not _title_has_branch_ver(title, branch_ver):
                 continue
-            if rtype == "PC":
-                if not title_lower.strip().startswith("pc"):
-                    continue
-            if branch_ver in title_lower:
-                pid = str(page.get("id", ""))
-                Log.info(f"Fuzzy-matched page: '{page['title']}' (id={pid})")
-                return pid, page["title"]
+            if rtype == "PC" and not title.lower().strip().startswith("pc"):
+                continue
+            pid = str(page.get("id", ""))
+            Log.info(f"Fuzzy-matched page: '{page['title']}' (id={pid})")
+            return pid, page["title"]
 
     # No match — create under the best parent
     new_title = _new_page_title(rtype, branch, branch_ver, rhel_ver)
@@ -558,13 +572,13 @@ def _extract_fix_version_from_jira_text(text):
 
 
 def _extract_branch_version_from_row(row):
-    """Extract x.y branch version from notes/version fields."""
+    """Extract the Jira fix-version prefix from notes or the goldimage version."""
     notes = str(row.get("notes", "")).strip()
-    m = re.search(r"ganges-([\d.]+)", notes)
-    if m:
-        return m.group(1)
+    _page, fix = parse_ganges_branch(notes)
+    if fix:
+        return fix
     ver = str(row.get("goldimage_version", row.get("ver", ""))).strip()
-    m = re.search(r"ganges-(?:pc\.)?([\d.]+)-", ver)
+    m = re.search(r"ganges-(?:pc\.)?(\d+(?:\.\d+)+)-", ver)
     return m.group(1) if m else ""
 
 
@@ -794,10 +808,15 @@ def _extract_existing_rows_by_columns(page_content, columns):
         cells = [c.strip() for c in line.split("|")[1:-1]]
         if len(cells) < max(5, len(columns)):
             continue
-        # Skip delimiter / header rows
-        if all(re.match(r"^[:\-]+$", c or "-") for c in cells):
+        # Skip delimiter / header / blank template rows.
+        # Empty cells must not be treated as "---" or a blank starter
+        # row is mistaken for a separator and the page looks unparsable.
+        nonempty = [c for c in cells if c]
+        if nonempty and all(re.match(r"^[:\-]+$", c) for c in nonempty):
             continue
-        if any("goldimage" in c.lower() for c in cells):
+        if not nonempty:
+            continue
+        if any(c.lower() == "goldimage version" for c in cells):
             continue
         rows.append(cells[:len(columns)])
 
@@ -842,6 +861,30 @@ def _is_blank_status_value(value):
     """Treat empty/placeholder status values as blank."""
     s = str(value or "").strip()
     return s in ("", "--", "N/A", "na", "None")
+
+
+def _is_blank_template_table(page_content):
+    """True when the page table has a header and no populated body cells.
+
+    ``Modern STS - 7.6.0.X`` was created with a header and one empty row.
+    That is an empty template, not a parse failure.
+    """
+    saw_header = False
+    saw_value = False
+    for line in (page_content or "").split("\n"):
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+        nonempty = [c for c in cells if c]
+        if nonempty and all(re.match(r"^[:\-]+$", c) for c in nonempty):
+            continue
+        if any(c.lower() == "goldimage version" for c in cells):
+            saw_header = True
+            continue
+        if nonempty:
+            saw_value = True
+    return saw_header and not saw_value
 
 
 def extract_existing_versions(page_content):
@@ -1121,7 +1164,7 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
 
     page_content = get_page_content(server_key, page_id)
     existing_versions, existing_cells = extract_existing_versions(page_content)
-    preserve_existing_layout = branch in PC_TARBALL_BRANCHES
+    preserve_existing_layout = preserves_confluence_layout(branch)
     existing_columns = (_extract_existing_columns(page_content)
                         if preserve_existing_layout else None)
     version_col_idx = 0
@@ -1150,7 +1193,9 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
         or re.search(r"^\|.*\|$", page_content, re.MULTILINE) is not None
     )
     is_placeholder_page = "table pending" in page_content.lower()
+    is_blank_template = _is_blank_template_table(page_content)
     if (has_any_content and looks_like_existing_table and not is_placeholder_page
+            and not is_blank_template
             and not existing_cells and not force_rebuild):
         raise RuntimeError(
             f"Safety stop: unable to parse existing rows on page {page_id}; "
@@ -1207,7 +1252,7 @@ def upload_releases(server_key, parent_id, branch, rows, release_type=None,
                 row.get("aos_release", row.get("AOS_release", ""))
             ).strip()
             jira_branch_equiv_value = _extract_jira_branch_equiv_from_row(row)
-            use_jira_branch_equiv_release = branch in PC_TARBALL_BRANCHES
+            use_jira_branch_equiv_release = preserves_confluence_layout(branch)
 
             # Populate PC release value for both explicit PC columns and
             # generic "Release" columns when handling PC rows.

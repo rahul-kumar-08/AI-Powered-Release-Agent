@@ -6,7 +6,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.config import mcp_call_tool, _get_env
+from src.config import mcp_call_tool, _get_env, parse_ganges_branch, tracker_matches_branch
 from src.logger import Log
 
 
@@ -347,11 +347,18 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
             gerrit_branch = branch_match.group(1).strip() if branch_match else ""
             cr_url = cr_match.group(1).rstrip(']')
 
-            if (branch_short == jira_ver
+            page_ver, _fix_prefix = parse_ganges_branch(branch)
+            if page_ver.lower().endswith(".x"):
+                matched = tracker_matches_branch(branch, gerrit_branch, jira_ver)
+            else:
+                matched = (
+                    branch_short == jira_ver
                     or branch_short == gerrit_branch
                     or branch == gerrit_branch
                     or gerrit_branch.startswith(f"ganges-{branch_short}")
-                    or gerrit_branch.startswith(branch)):
+                    or gerrit_branch.startswith(branch)
+                )
+            if matched:
                 comment_created = c.get("created", "")
                 candidates.append({
                     "cr_url": cr_url,

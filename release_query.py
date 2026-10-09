@@ -53,6 +53,12 @@ from urllib.request import urlopen, Request
 import pandas as pd
 import paramiko
 
+from src.config import (
+    endor_branch_ver,
+    normalize_branch_name,
+    parse_ganges_branch,
+    tracker_matches_branch,
+)
 from src.endor import publish_to_endor, rewrite_urls_to_endor
 from src.formatter import format_table as _fmt
 from src.logger import Log
@@ -270,11 +276,7 @@ def build_endor_urls(version_str, release_type, branch):
     Master PC:         http://endor.dyn.nutanix.com/GoldImages/PC_GoldImages/pc/master/<VERSION_GI>/
     STS PC:            https://endor-cache-2.corp.nutanix.com/GoldImages/PC_GoldImages/pc/pc.<branch_ver>/<VERSION_GI>/
     """
-    branch_ver = None
-    if branch and branch != "master":
-        m = re.match(r"ganges-([\d.]+)", branch)
-        if m:
-            branch_ver = m.group(1)
+    branch_ver = endor_branch_ver(branch, version_str) or None
 
     if release_type == "pc":
         if branch_ver:
@@ -438,10 +440,11 @@ def _resolve_fix_version_branches(branch):
     """
     if branch == "master":
         return []
-    m = re.match(r"ganges-([\d.]+)", branch)
-    if not m:
+    _page_ver, fix_prefix = parse_ganges_branch(branch)
+    if not fix_prefix:
         return []
-    branch_ver = m.group(1)
+    # Wildcard lines (ganges-7.6.0.x) match 7.6.0.N, not every 7.6.* version.
+    branch_ver = fix_prefix
 
     jira_token = _resolve_jira_token()
     jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
@@ -954,12 +957,19 @@ def _search_git_tracker_comments(ticket_keys, branch_short, branch,
             cr_url = cr_match.group(1).rstrip(']')
 
             is_master = (branch == "master")
-            if (branch_short == jira_ver
+            page_ver, _fix_prefix = parse_ganges_branch(branch)
+            if page_ver.lower().endswith(".x"):
+                matched = tracker_matches_branch(branch, gerrit_branch, jira_ver)
+            else:
+                matched = (
+                    branch_short == jira_ver
                     or branch_short == gerrit_branch
                     or branch == gerrit_branch
                     or (is_master and gerrit_branch == "main")
                     or gerrit_branch.startswith(f"ganges-{branch_short}")
-                    or gerrit_branch.startswith(branch)):
+                    or gerrit_branch.startswith(branch)
+                )
+            if matched:
                 comment_created = c.get("created", "")
                 candidates.append({
                     "cr_url": cr_url,
@@ -1347,6 +1357,7 @@ def _extract_heading_versions(title_clean):
     Combined release title formats:
       - "Release gold image <AOS>/PC:Release gold image <PC>"
       - "Release gold image <AOS>/PC : Release gold image <PC>"
+      - "Release gold image <AOS> / PC : Release gold image <PC>"
       - "Release gold image <AOS>/Release gold image <PC>"  (older format)
 
     Returns: {"aos": "<version>" or None, "pc": "<version>" or None}
@@ -1354,8 +1365,8 @@ def _extract_heading_versions(title_clean):
     heading_aos = None
     heading_pc = None
 
-    # Try splitting on /PC: or /PC : (newer format)
-    pc_split = re.split(r"/PC\s*:\s*", title_clean, maxsplit=1)
+    # Try splitting on /PC:, /PC :, or / PC : (space around the slash is optional)
+    pc_split = re.split(r"/\s*PC\s*:\s*", title_clean, maxsplit=1)
     if len(pc_split) == 2:
         aos_part = pc_split[0].strip()
         pc_part = pc_split[1].strip()
@@ -1652,7 +1663,7 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
                 if aos_version and aos_version in gh_title:
                     # Verify the match is in the AOS portion (before /PC:), not
                     # a coincidental match in the PC portion of another commit.
-                    aos_part = gh_title.split("/PC:")[0] if "/PC:" in gh_title else gh_title
+                    aos_part = re.split(r"/\s*PC\s*:\s*", gh_title, maxsplit=1)[0]
                     if aos_version in aos_part:
                         gh_epics = epics
                         break
@@ -3048,6 +3059,7 @@ Examples:
                         help="MCP server key from mcp.json")
 
     args = parser.parse_args()
+    args.branch = normalize_branch_name(args.branch)
 
     server_key = args.server
 

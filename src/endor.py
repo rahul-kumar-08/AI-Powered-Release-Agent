@@ -7,6 +7,7 @@ from src.config import (
     BASE_URL,
     ENDOR_AOS_RHEL9_MASTER, ENDOR_AOS_STS_BASE, ENDOR_AOS_RHEL8_BASE,
     ENDOR_PC_MASTER, ENDOR_PC_STS_BASE, ENDOR_CACHE_BASE,
+    endor_branch_ver,
 )
 from src.logger import Log
 from src.version import _parse_rhel8_version
@@ -17,11 +18,7 @@ from tools.jenkins_tool import (
 
 def _build_endor_base_dir(version_str, release_type, branch):
     """Build the endor-relative directory path using the ENDOR_* constants."""
-    branch_ver = None
-    if branch and branch != "master":
-        m = re.match(r"ganges-([\d.]+)", branch)
-        if m:
-            branch_ver = m.group(1)
+    branch_ver = endor_branch_ver(branch, version_str) or None
 
     if release_type == "pc":
         if branch_ver:

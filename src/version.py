@@ -8,7 +8,8 @@ from src.config import (
     _get_env,
     BASE_URL, GITHUB_REPO,
     ENDOR_AOS_RHEL9_MASTER, ENDOR_AOS_STS_BASE, ENDOR_AOS_RHEL8_BASE,
-    ENDOR_PC_MASTER, ENDOR_PC_STS_BASE, PC_TARBALL_BRANCHES
+    ENDOR_PC_MASTER, ENDOR_PC_STS_BASE, PC_TARBALL_BRANCHES,
+    endor_branch_ver, parse_ganges_branch,
 )
 from src.logger import Log
 from src.jira_client import search_jira_epic, validate_version_with_jira
@@ -38,11 +39,7 @@ def _parse_rhel8_version(version_str):
 
 def build_endor_urls(version_str, release_type, branch):
     """Construct changelog and RPM URLs based on release type, RHEL version, and branch."""
-    branch_ver = None
-    if branch and branch != "master":
-        m = re.match(r"ganges-([\d.]+)", branch)
-        if m:
-            branch_ver = m.group(1)
+    branch_ver = endor_branch_ver(branch, version_str) or None
 
     if release_type == "pc":
         if branch_ver:
@@ -116,7 +113,7 @@ def _extract_heading_versions(title_clean):
     heading_aos = None
     heading_pc = None
 
-    pc_split = re.split(r"/PC\s*:\s*", title_clean, maxsplit=1)
+    pc_split = re.split(r"/\s*PC\s*:\s*", title_clean, maxsplit=1)
     if len(pc_split) == 2:
         aos_part = pc_split[0].strip()
         pc_part = pc_split[1].strip()
@@ -172,9 +169,12 @@ def _extract_num_suffix(v):
 
 
 def _extract_branch_version(branch):
-    """Extract x.y branch version from ganges-x.y."""
-    m = re.match(r"ganges-([\d.]+)", branch or "")
-    return m.group(1) if m else ""
+    """Extract the Jira fix-version prefix from a ganges branch.
+
+    ``ganges-7.6`` → ``7.6``. ``ganges-7.6.0.x`` → ``7.6.0``.
+    """
+    _page, fix = parse_ganges_branch(branch)
+    return fix
 
 
 def _pick_pc_release_from_fix_versions(fix_versions, branch):
@@ -428,7 +428,7 @@ def parse_releases(server_key, github_commits, gerrit_commits, github_epics, bra
         else:
             for gh_title, epics in github_epics.items():
                 if aos_version and aos_version in gh_title:
-                    aos_part = gh_title.split("/PC:")[0] if "/PC:" in gh_title else gh_title
+                    aos_part = re.split(r"/\s*PC\s*:\s*", gh_title, maxsplit=1)[0]
                     if aos_version in aos_part:
                         gh_epics = epics
                         break

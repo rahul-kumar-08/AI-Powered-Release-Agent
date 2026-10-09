@@ -22,7 +22,7 @@ DATA_DIR = ROOT_DIR / "dashboard_data"
 CRON_STORE = DATA_DIR / "cron_jobs.json"
 RUN_STORE = DATA_DIR / "runs.json"
 ENV_FILE = ROOT_DIR / "tools" / ".env"
-BRANCH_OPTIONS = ["master", "ganges-7.6", "ganges-7.5", "ganges-7.3"]
+BRANCH_OPTIONS = ["master", "ganges-7.6", "ganges-7.6.0.x", "ganges-7.5", "ganges-7.3"]
 CRON_PRESETS = {
     "Every 5 minutes": "*/5 * * * *",
     "Every 15 minutes": "*/15 * * * *",

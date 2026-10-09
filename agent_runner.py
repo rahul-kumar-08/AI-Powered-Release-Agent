@@ -45,7 +45,7 @@ from tools.mcp_confluence_client import detect_release_type
 MAX_TOOL_RETRIES = 3
 RETRY_BACKOFF_BASE = 2
 
-ALL_BRANCHES = ["master", "ganges-7.3", "ganges-7.5", "ganges-7.6"]
+ALL_BRANCHES = ["master", "ganges-7.3", "ganges-7.5", "ganges-7.6", "ganges-7.6.0.x"]
 
 DECOMPOSITION_PROMPT_TEMPLATE = """You are a mission planner for a Release Agent. Your ONLY job is to
 decompose the user's mission into an ordered list of tool steps.
@@ -90,6 +90,9 @@ Available tools and their parameters:
 Known branches (in order): {all_branches}
 
 Rules:
+- "ganges-7.6.0.X" and "ganges-7.6.0.x" mean branch "ganges-7.6.0.x".
+  Do not rewrite that branch to "ganges-7.6". Confluence pages for it are
+  "Modern STS - 7.6.0.X" (AOS) and "PC.7.6.0.X" (PC).
 - Return ONLY a JSON array. No markdown, no explanation, no extra text.
 - Each element: {{"step": N, "tool": "<name>", "params": {{...}}}}
 - A single release_query step handles the full pipeline including Confluence.
@@ -169,11 +172,11 @@ Output:
 
 Mission: "Get last releases from each branch for both PC and AOS"
 Output:
-[{{"step":1,"tool":"release_query","params":{{"branch":"master","count":1,"filter":"all","no_upload":true}}}},{{"step":2,"tool":"release_query","params":{{"branch":"ganges-7.3","count":1,"filter":"all","no_upload":true}}}},{{"step":3,"tool":"release_query","params":{{"branch":"ganges-7.5","count":1,"filter":"all","no_upload":true}}}},{{"step":4,"tool":"release_query","params":{{"branch":"ganges-7.6","count":1,"filter":"all","no_upload":true}}}}]
+[{{"step":1,"tool":"release_query","params":{{"branch":"master","count":1,"filter":"all","no_upload":true}}}},{{"step":2,"tool":"release_query","params":{{"branch":"ganges-7.3","count":1,"filter":"all","no_upload":true}}}},{{"step":3,"tool":"release_query","params":{{"branch":"ganges-7.5","count":1,"filter":"all","no_upload":true}}}},{{"step":4,"tool":"release_query","params":{{"branch":"ganges-7.6","count":1,"filter":"all","no_upload":true}}}},{{"step":5,"tool":"release_query","params":{{"branch":"ganges-7.6.0.x","count":1,"filter":"all","no_upload":true}}}}]
 
 Mission: "Latest PC release from every branch"
 Output:
-[{{"step":1,"tool":"release_query","params":{{"branch":"master","count":1,"filter":"pc","no_upload":true}}}},{{"step":2,"tool":"release_query","params":{{"branch":"ganges-7.3","count":1,"filter":"pc","no_upload":true}}}},{{"step":3,"tool":"release_query","params":{{"branch":"ganges-7.5","count":1,"filter":"pc","no_upload":true}}}},{{"step":4,"tool":"release_query","params":{{"branch":"ganges-7.6","count":1,"filter":"pc","no_upload":true}}}}]
+[{{"step":1,"tool":"release_query","params":{{"branch":"master","count":1,"filter":"pc","no_upload":true}}}},{{"step":2,"tool":"release_query","params":{{"branch":"ganges-7.3","count":1,"filter":"pc","no_upload":true}}}},{{"step":3,"tool":"release_query","params":{{"branch":"ganges-7.5","count":1,"filter":"pc","no_upload":true}}}},{{"step":4,"tool":"release_query","params":{{"branch":"ganges-7.6","count":1,"filter":"pc","no_upload":true}}}},{{"step":5,"tool":"release_query","params":{{"branch":"ganges-7.6.0.x","count":1,"filter":"pc","no_upload":true}}}}]
 
 Mission: "Force rebuild confluence page for ganges-7.6 PC releases"
 Output:

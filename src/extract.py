@@ -8,6 +8,7 @@ import urllib.request
 from src.config import (
     mcp_call_tool, _get_env,
     DEFAULT_REPO, GITHUB_REPO, TOOL_PREFIX,
+    parse_ganges_branch,
 )
 from src.jira_client import _resolve_jira_token
 from src.logger import Log
@@ -94,10 +95,11 @@ def _resolve_fix_version_branches(branch):
     """
     if branch == "master":
         return []
-    m = re.match(r"ganges-([\d.]+)", branch)
-    if not m:
+    _page_ver, fix_prefix = parse_ganges_branch(branch)
+    if not fix_prefix:
         return []
-    branch_ver = m.group(1)
+    # Wildcard lines (ganges-7.6.0.x) match 7.6.0.N, not every 7.6.* version.
+    branch_ver = fix_prefix
 
     jira_token = _resolve_jira_token()
     jira_url = _get_env("JIRA_BASE_URL", "https://jira.nutanix.com")
